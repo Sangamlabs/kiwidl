@@ -129,6 +129,16 @@ def format_duration(seconds: Optional[float]) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+@app.get("/")
+def root():
+    return {
+        "service": "KiwiAPI",
+        "status": "online",
+        "version": "1.0.0",
+        "docs": "/docs",
+    }
+
+
 @app.get("/health")
 def health_check():
     return {"status": "ok", "time": time.time()}
