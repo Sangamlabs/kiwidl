@@ -26,6 +26,14 @@ http://kiwiapi.net:8080 {
 
 http://dl.kiwiapi.net:8080 {
 	root * /opt/kiwiapi/www/dl
+
+	handle /docs* {
+		reverse_proxy 127.0.0.1:8000
+	}
+	handle /openapi.json {
+		reverse_proxy 127.0.0.1:8000
+	}
+
 	import common_static
 }
 
