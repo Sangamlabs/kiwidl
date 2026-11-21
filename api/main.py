@@ -194,6 +194,8 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
+        "check_formats": False,
+        "format": "all",
         "format_sort": ["res", "fps", "vbr", "tbr", "size"],
         "remote_components": ["ejs:github"],
     }
