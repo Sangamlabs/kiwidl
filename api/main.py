@@ -157,7 +157,11 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
+        "format_sort": ["res", "fps", "vbr", "tbr", "size"],
     }
+    node_path = shutil.which("node")
+    if node_path:
+        ydl_opts["js_runtimes"] = {"node": {"path": node_path}}
 
     loop = asyncio.get_running_loop()
 
@@ -182,40 +186,45 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
     audio_options = []
     image_options = []
 
-    # Check for formats
+    # Check for formats - group by height and select highest bitrate stream
     formats = info.get("formats", [])
-    seen_heights = set()
+    best_by_height = {}
     for f in formats:
         h = f.get("height")
         vcodec = f.get("vcodec", "none")
-        acodec = f.get("acodec", "none")
-        if h and h >= 360 and vcodec != "none" and h not in seen_heights:
-            seen_heights.add(h)
-            filesize = f.get("filesize") or f.get("filesize_approx")
-            size_str = f"{round(filesize / (1024 * 1024), 1)} MB" if filesize else "Direct MP4"
-            if h >= 2160:
-                label = f"4K ({h}p) MP4"
-            elif h >= 1440:
-                label = f"2K ({h}p) MP4"
-            elif h >= 1080:
-                label = "1080p MP4"
-            elif h >= 720:
-                label = "720p MP4"
-            else:
-                label = f"{h}p MP4"
-            video_options.append({"label": label, "size": size_str, "_h": h})
+        if h and h >= 360 and vcodec != "none":
+            tbr = f.get("tbr") or 0
+            vbr = f.get("vbr") or 0
+            size = f.get("filesize") or f.get("filesize_approx") or 0
+            score = size or ((vbr or tbr) * 1000)
+            if h not in best_by_height or score > best_by_height[h]["score"]:
+                best_by_height[h] = {"format": f, "score": score, "size": size, "tbr": tbr}
+
+    for h in sorted(best_by_height.keys(), reverse=True):
+        entry = best_by_height[h]
+        filesize = entry["size"]
+        size_str = f"{round(filesize / (1024 * 1024), 1)} MB" if filesize else "High Bitrate"
+        if h >= 2160:
+            label = f"4K ({h}p) • Ultra HD"
+        elif h >= 1440:
+            label = f"2K ({h}p) • QHD"
+        elif h >= 1080:
+            label = "1080p • Full HD (Max Quality)"
+        elif h >= 720:
+            label = "720p • HD"
+        else:
+            label = f"{h}p MP4"
+        video_options.append({"label": label, "size": size_str})
 
     if not video_options:
         video_options = [
-            {"label": "4K (2160p) MP4", "size": "Ultra HD", "_h": 2160},
-            {"label": "1080p MP4", "size": "Standard", "_h": 1080},
-            {"label": "720p MP4", "size": "Fast", "_h": 720},
-            {"label": "480p MP4", "size": "Compact", "_h": 480},
+            {"label": "4K (2160p) • Ultra HD", "size": "Ultra HD"},
+            {"label": "1080p • Full HD (Max Quality)", "size": "Standard"},
+            {"label": "720p • HD", "size": "Fast"},
+            {"label": "480p MP4", "size": "Compact"},
         ]
-    else:
-        video_options.sort(key=lambda x: x.get("_h", 0), reverse=True)
 
-    clean_video_options = [{"label": opt["label"], "size": opt["size"]} for opt in video_options[:6]]
+    clean_video_options = video_options[:6]
 
     audio_options = [
         {"label": "MP3 320 kbps", "size": "Best Audio"},
@@ -265,6 +274,9 @@ def _run_download_task(job_id: str, url: str, media_type: str, quality: str):
         "no_warnings": True,
         "outtmpl": str(job_dir / "%(title).50s.%(ext)s"),
     }
+    node_path = shutil.which("node")
+    if node_path:
+        ydl_opts["js_runtimes"] = {"node": {"path": node_path}}
 
     if media_type == "audio":
         preferred_codec = "mp3"
@@ -301,8 +313,20 @@ def _run_download_task(job_id: str, url: str, media_type: str, quality: str):
             target_height = "360"
 
         ydl_opts.update({
-            "format": f"bestvideo[height<={target_height}]+bestaudio/best[height<={target_height}]/best",
+            # Highest bitrate master video matching target height + best audio stream
+            "format": f"bestvideo[height={target_height}]+bestaudio/bestvideo[height<={target_height}]+bestaudio/bestvideo+bestaudio/best",
+            "format_sort": [
+                f"res:{target_height}",
+                "fps",
+                "vbr",
+                "tbr",
+                "size",
+                "codec:av01,vp09,vp9,h264",
+            ],
             "merge_output_format": "mp4",
+            "postprocessor_args": {
+                "ffmpeg": ["-c:v", "copy", "-c:a", "aac", "-b:a", "320k"]
+            },
         })
     else:  # image
         ydl_opts.update({
