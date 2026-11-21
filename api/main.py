@@ -193,16 +193,29 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
             seen_heights.add(h)
             filesize = f.get("filesize") or f.get("filesize_approx")
             size_str = f"{round(filesize / (1024 * 1024), 1)} MB" if filesize else "Direct MP4"
-            video_options.append({"label": f"{h}p MP4", "size": size_str})
+            if h >= 2160:
+                label = f"4K ({h}p) MP4"
+            elif h >= 1440:
+                label = f"2K ({h}p) MP4"
+            elif h >= 1080:
+                label = "1080p MP4"
+            elif h >= 720:
+                label = "720p MP4"
+            else:
+                label = f"{h}p MP4"
+            video_options.append({"label": label, "size": size_str, "_h": h})
 
     if not video_options:
         video_options = [
-            {"label": "1080p MP4", "size": "Standard"},
-            {"label": "720p MP4", "size": "Fast"},
-            {"label": "480p MP4", "size": "Compact"},
+            {"label": "4K (2160p) MP4", "size": "Ultra HD", "_h": 2160},
+            {"label": "1080p MP4", "size": "Standard", "_h": 1080},
+            {"label": "720p MP4", "size": "Fast", "_h": 720},
+            {"label": "480p MP4", "size": "Compact", "_h": 480},
         ]
     else:
-        video_options.sort(key=lambda x: int(x["label"].split("p")[0]) if "p" in x["label"] else 0, reverse=True)
+        video_options.sort(key=lambda x: x.get("_h", 0), reverse=True)
+
+    clean_video_options = [{"label": opt["label"], "size": opt["size"]} for opt in video_options[:6]]
 
     audio_options = [
         {"label": "MP3 320 kbps", "size": "Best Audio"},
@@ -234,7 +247,7 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
         "author": author,
         "duration": duration,
         "thumbnail": thumbnail,
-        "video": video_options[:4],
+        "video": clean_video_options,
         "audio": audio_options,
         "images": image_options[:12],
     }
@@ -273,10 +286,19 @@ def _run_download_task(job_id: str, url: str, media_type: str, quality: str):
         })
     elif media_type == "video":
         target_height = "1080"
-        if "720" in quality:
+        q_lower = quality.lower()
+        if "2160" in q_lower or "4k" in q_lower:
+            target_height = "2160"
+        elif "1440" in q_lower or "2k" in q_lower:
+            target_height = "1440"
+        elif "1080" in q_lower:
+            target_height = "1080"
+        elif "720" in q_lower:
             target_height = "720"
-        elif "480" in quality:
+        elif "480" in q_lower:
             target_height = "480"
+        elif "360" in q_lower:
+            target_height = "360"
 
         ydl_opts.update({
             "format": f"bestvideo[height<={target_height}]+bestaudio/best[height<={target_height}]/best",
