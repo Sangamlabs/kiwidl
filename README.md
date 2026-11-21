@@ -1,4 +1,4 @@
-# 🥝 KiwiDL (Saltwake Docks)
+# 🥝 KiwiDL (KiwiAPI)
 
 > A modern, multi-platform media downloader, carousel image extractor, and song identifier featuring a nautical design and procedural canvas physics.
 
