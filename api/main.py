@@ -200,6 +200,12 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
     if node_path:
         ydl_opts["js_runtimes"] = {"node": {"path": node_path}}
 
+    cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
+    if not cookie_file.exists():
+        cookie_file = Path("cookies.txt")
+    if cookie_file.exists():
+        ydl_opts["cookiefile"] = str(cookie_file)
+
     loop = asyncio.get_running_loop()
 
     def _extract():
@@ -320,6 +326,12 @@ def _run_download_task(job_id: str, url: str, media_type: str, quality: str):
     node_path = shutil.which("node")
     if node_path:
         ydl_opts["js_runtimes"] = {"node": {"path": node_path}}
+
+    cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
+    if not cookie_file.exists():
+        cookie_file = Path("cookies.txt")
+    if cookie_file.exists():
+        ydl_opts["cookiefile"] = str(cookie_file)
 
     aria2_path = shutil.which("aria2c")
     if aria2_path:
