@@ -728,28 +728,24 @@ export default function App() {
         {/* Top chrome solid bar */}
         <header className={`top${sheetScrolled ? ' is-scrolled' : ''}`}>
           <a
-            href="https://kiwiapi.net"
-            target="_blank"
-            rel="noopener noreferrer"
+            href="#"
             className="brand-logo"
-            aria-label="Saltwake Home"
+            aria-label="KiwiAPI Home"
           >
             <AnchorIcon />
-            <span>Saltwake</span>
+            <span>KiwiAPI</span>
           </a>
 
           <nav className="top-nav" aria-label="Primary">
             <a
-              href="https://kiwiapi.net"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="#"
               className="nav-link"
             >
               <AnchorIcon className="nav-anchor" />
               <span>Home</span>
             </a>
             <a
-              href="https://docs.kiwiapi.net"
+              href="https://api.kiwiapi.net/docs"
               target="_blank"
               rel="noopener noreferrer"
               className="nav-link"
