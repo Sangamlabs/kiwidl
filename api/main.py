@@ -223,34 +223,40 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
     audio_options = []
     image_options = []
 
-    # Check for formats - group by height and select highest bitrate stream
+    # Check for formats - group by true resolution tier and select highest bitrate stream
     formats = info.get("formats", [])
-    best_by_height = {}
+    best_by_res = {}
     for f in formats:
         h = f.get("height")
+        w = f.get("width")
         vcodec = f.get("vcodec", "none")
-        if h and h >= 360 and vcodec != "none":
-            tbr = f.get("tbr") or 0
-            vbr = f.get("vbr") or 0
-            size = f.get("filesize") or f.get("filesize_approx") or 0
-            score = size or ((vbr or tbr) * 1000)
-            if h not in best_by_height or score > best_by_height[h]["score"]:
-                best_by_height[h] = {"format": f, "score": score, "size": size, "tbr": tbr}
+        if vcodec != "none" and (h or w):
+            # Short edge represents the resolution tier (720p for 720x1280 or 1280x720)
+            res = min(h, w) if (h and w) else (h or w or 0)
+            if res >= 360:
+                tbr = f.get("tbr") or 0
+                vbr = f.get("vbr") or 0
+                size = f.get("filesize") or f.get("filesize_approx") or 0
+                score = size or ((vbr or tbr) * 1000)
+                if res not in best_by_res or score > best_by_res[res]["score"]:
+                    best_by_res[res] = {"format": f, "score": score, "size": size, "tbr": tbr, "res": res}
 
-    for h in sorted(best_by_height.keys(), reverse=True):
-        entry = best_by_height[h]
+    for res in sorted(best_by_res.keys(), reverse=True):
+        entry = best_by_res[res]
         filesize = entry["size"]
         size_str = f"{round(filesize / (1024 * 1024), 1)} MB" if filesize else "High Bitrate"
-        if h >= 2160:
-            label = f"4K ({h}p) • Ultra HD"
-        elif h >= 1440:
-            label = f"2K ({h}p) • QHD"
-        elif h >= 1080:
+        if res >= 2160:
+            label = "4K (2160p) • Ultra HD"
+        elif res >= 1440:
+            label = "2K (1440p) • QHD"
+        elif res >= 1080:
             label = "1080p • Full HD (Max Quality)"
-        elif h >= 720:
+        elif res >= 720:
             label = "720p • HD"
+        elif res >= 480:
+            label = "480p • SD"
         else:
-            label = f"{h}p MP4"
+            label = f"{res}p MP4"
         video_options.append({"label": label, "size": size_str})
 
     if not video_options:
@@ -315,6 +321,13 @@ def _run_download_task(job_id: str, url: str, media_type: str, quality: str):
     if node_path:
         ydl_opts["js_runtimes"] = {"node": {"path": node_path}}
 
+    aria2_path = shutil.which("aria2c")
+    if aria2_path:
+        ydl_opts["downloader"] = {"default": "aria2c"}
+        ydl_opts["downloader_args"] = {
+            "aria2c": ["-s", "8", "-x", "8", "-k", "1M", "--min-split-size=1M"]
+        }
+
     if media_type == "audio":
         preferred_codec = "mp3"
         bitrate = "320"
@@ -334,35 +347,39 @@ def _run_download_task(job_id: str, url: str, media_type: str, quality: str):
             }],
         })
     elif media_type == "video":
-        target_height = "1080"
+        target_res = 1080
         q_lower = quality.lower()
         if "2160" in q_lower or "4k" in q_lower:
-            target_height = "2160"
+            target_res = 2160
         elif "1440" in q_lower or "2k" in q_lower:
-            target_height = "1440"
+            target_res = 1440
         elif "1080" in q_lower:
-            target_height = "1080"
+            target_res = 1080
         elif "720" in q_lower:
-            target_height = "720"
+            target_res = 720
         elif "480" in q_lower:
-            target_height = "480"
+            target_res = 480
         elif "360" in q_lower:
-            target_height = "360"
+            target_res = 360
 
         ydl_opts.update({
-            # Highest bitrate master video matching target height + best audio stream
-            "format": f"bestvideo[height={target_height}]+bestaudio/bestvideo[height<={target_height}]+bestaudio/bestvideo+bestaudio/best",
+            # Matches landscape (height<=target_res) and vertical (width<=target_res)
+            "format": (
+                f"bestvideo[height<={target_res}]+bestaudio/"
+                f"bestvideo[width<={target_res}]+bestaudio/"
+                f"bestvideo+bestaudio/"
+                f"best[height<={target_res}]/best[width<={target_res}]/best"
+            ),
             "format_sort": [
-                f"res:{target_height}",
+                f"res:{target_res}",
                 "fps",
                 "vbr",
                 "tbr",
                 "size",
-                "codec:av01,vp09,vp9,h264",
             ],
             "merge_output_format": "mp4",
             "postprocessor_args": {
-                "ffmpeg": ["-c:v", "copy", "-c:a", "aac", "-b:a", "320k"]
+                "ffmpeg": ["-c:v", "copy", "-c:a", "aac", "-b:a", "320k", "-movflags", "+faststart"]
             },
         })
     else:  # image
