@@ -1,0 +1,35 @@
+{
+	auto_https off
+	admin off
+}
+
+(common_static) {
+	bind 127.0.0.1
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+	}
+
+	@html path / *.html
+	header @html Cache-Control "public, max-age=300"
+
+	file_server
+}
+
+http://kiwiapi.net:8080 {
+	root * /opt/kiwiapi/www/main
+	import common_static
+}
+
+http://dl.kiwiapi.net:8080 {
+	root * /opt/kiwiapi/www/dl
+	import common_static
+}
+
+http://:8080 {
+	bind 127.0.0.1
+	respond 404
+}

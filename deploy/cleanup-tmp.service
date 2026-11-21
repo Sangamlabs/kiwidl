@@ -1,0 +1,9 @@
+[Unit]
+Description=Clean temporary KiwiAPI download files older than 60 minutes
+
+[Service]
+Type=oneshot
+User=kiwi
+Group=kiwi
+ExecStart=/usr/bin/find /var/lib/kiwiapi/tmp -mindepth 1 -type f -mmin +60 -delete
+ExecStartPost=/usr/bin/find /var/lib/kiwiapi/tmp -mindepth 1 -type d -empty -mmin +60 -delete

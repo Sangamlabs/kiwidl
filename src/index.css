@@ -1,0 +1,878 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #e6e0cf;
+  --ink: #201c15;
+  --line: #16130e;
+  --band: #d7d2c2;
+  --band2: #dcd7c7;
+  --card: #ece7d8;
+  --ok: #2f5d3a;
+  --err: #9b2f22;
+  --bandh: clamp(120px, 20vh, 190px);
+  --toph: 120px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: var(--paper);
+  overflow: hidden;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  font-family: "Open Sans", sans-serif;
+}
+
+html.fine,
+html.fine * {
+  cursor: none !important;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.frame {
+  position: fixed;
+  inset: 14px;
+  border-radius: 34px;
+  overflow: hidden;
+  background: var(--paper);
+  isolation: isolate;
+}
+
+.frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 6px solid var(--line);
+  border-radius: 34px;
+  pointer-events: none;
+  z-index: 30;
+}
+
+#shade {
+  position: absolute;
+  left: -12%;
+  top: -12%;
+  width: 124%;
+  height: 124%;
+  mix-blend-mode: multiply;
+  opacity: 0.3;
+  pointer-events: none;
+  z-index: 25;
+  will-change: transform;
+}
+
+h1,
+h2 {
+  font-family: "Goudy Bookletter 1911", "Sorts Mill Goudy", serif;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: -0.045em;
+}
+
+.eb {
+  font: 400 22px/1 "Sorts Mill Goudy", serif;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+/* the one shadow style used everywhere: a hard ink offset, never a soft blur */
+.pill {
+  display: inline-block;
+  position: relative;
+  font: 600 17px/1 "Josefin Sans", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  border: 3px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink);
+  padding: 16px 34px 13px;
+  box-shadow: 0 7px 0 -1px var(--paper), 0 7px 0 2px var(--line);
+  transition: transform 0.25s, box-shadow 0.25s, background-color 0.2s, color 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.pill:hover:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 4px 0 -1px var(--paper), 0 4px 0 2px var(--line);
+}
+
+.pill:focus-visible,
+input:focus-visible,
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible {
+  outline: 3px solid var(--line);
+  outline-offset: 4px;
+}
+
+.pill[aria-selected="true"],
+.pill.solid {
+  background: var(--ink);
+  color: var(--paper);
+  transform: translateY(5px);
+  box-shadow: 0 2px 0 -1px var(--paper), 0 2px 0 2px var(--line);
+}
+
+.pill:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Custom black ring cursor and click ping */
+#cur,
+#ping {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 50;
+  pointer-events: none;
+  border-radius: 50%;
+  display: none;
+  will-change: transform, opacity;
+}
+
+html.fine #cur,
+html.fine #ping {
+  display: block;
+}
+
+#cur {
+  width: 40px;
+  height: 40px;
+  margin: -20px;
+  border: 5px solid var(--line);
+}
+
+#ping {
+  width: 40px;
+  height: 40px;
+  margin: -20px;
+  border: 1.5px solid var(--line);
+  opacity: 0;
+}
+
+/* Top chrome bar */
+.top {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--toph);
+  background: var(--paper);
+  z-index: 20;
+  border-bottom: 2px dashed transparent;
+  transition: border-color 0.2s ease;
+}
+
+.top.is-scrolled {
+  border-bottom: 2px dashed var(--line);
+}
+
+.brand-logo {
+  position: absolute;
+  left: 6.6%;
+  top: 58px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: "Goudy Bookletter 1911", "Sorts Mill Goudy", serif;
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.brand-logo svg {
+  width: 24px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.top-nav {
+  position: absolute;
+  right: 5.4%;
+  top: 62px;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.nav-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 700 12.5px/1 "Open Sans", sans-serif;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+  padding: 4px 0;
+}
+
+.nav-anchor {
+  width: 13px;
+  height: 15px;
+  opacity: 0;
+  transform: rotate(-30deg);
+  transform-origin: 50% 15%;
+  transition: opacity 0.3s ease, transform 0.55s cubic-bezier(0.3, 1.9, 0.5, 1);
+}
+
+.nav-link:hover .nav-anchor,
+.nav-link:focus-visible .nav-anchor {
+  opacity: 1;
+  transform: rotate(0deg);
+}
+
+/* Two fixed zones inside .frame */
+#sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--toph);
+  bottom: calc(var(--bandh) * 0.3);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink) transparent;
+}
+
+.sheet-inner {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 28px 28px calc(var(--bandh) * 0.9);
+}
+
+.hero-title {
+  font-size: 76px;
+  line-height: 0.92;
+  margin-top: 22px;
+  color: var(--ink);
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 14px;
+  margin-top: 40px;
+  flex-wrap: nowrap;
+}
+
+/* Wide pill input field */
+.field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 30px;
+  border: 3px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  padding: 8px 8px 8px 26px;
+  box-shadow: 0 7px 0 -1px var(--paper), 0 7px 0 2px var(--line);
+}
+
+.field-input-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: 600 16px/1.3 "Open Sans", sans-serif;
+  color: var(--ink);
+  padding: 6px 0;
+}
+
+.field-input::placeholder {
+  color: var(--ink);
+  opacity: 0.48;
+}
+
+.clear-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  opacity: 0.55;
+  transition: opacity 0.2s;
+}
+
+.clear-btn:hover,
+.clear-btn:focus-visible {
+  opacity: 1;
+}
+
+.clear-btn svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+
+.field-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.paste-btn {
+  font: 700 12.5px/1 "Open Sans", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.17em;
+  color: var(--ink);
+  padding: 10px 10px;
+  white-space: nowrap;
+  opacity: 0.78;
+  transition: opacity 0.2s;
+}
+
+.paste-btn:hover {
+  opacity: 1;
+}
+
+.field-submit.pill.solid {
+  padding: 13px 28px 10px;
+  transform: none;
+  box-shadow: none;
+}
+
+.field-submit.pill.solid:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  opacity: 0.9;
+}
+
+/* Upload clip pill for Song tab */
+.upload-row {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.upload-pill {
+  padding: 13px 26px 10px;
+  font-size: 15px;
+}
+
+.upload-filename {
+  font: 600 13px/1.3 "Open Sans", sans-serif;
+  color: var(--ink);
+  opacity: 0.75;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Platform marks */
+.marks {
+  margin-top: 22px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.mark {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  opacity: 0.28;
+  transition: opacity 0.25s ease;
+}
+
+.mark.active {
+  opacity: 1;
+}
+
+.mark-icon {
+  width: 26px;
+  height: 26px;
+  display: block;
+}
+
+.mark-underline {
+  width: 26px;
+  height: 4px;
+  display: block;
+  overflow: visible;
+}
+
+.mark-underline line {
+  stroke: var(--line);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 28;
+  stroke-dashoffset: 28;
+  transition: stroke-dashoffset 0.3s ease;
+}
+
+.mark.active .mark-underline line {
+  stroke-dashoffset: 0;
+}
+
+/* Status line */
+#msg {
+  font: 700 13px/1.4 "Open Sans", sans-serif;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  min-height: 20px;
+  margin-top: 18px;
+  color: var(--ink);
+}
+
+#msg.is-err {
+  color: var(--err);
+}
+
+#msg.is-ok {
+  color: var(--ok);
+}
+
+/* Result area & cards */
+#out {
+  margin-top: 28px;
+}
+
+#out:empty {
+  margin-top: 0;
+}
+
+.result-card {
+  background: var(--card);
+  border: 3px solid var(--line);
+  border-radius: 28px;
+  padding: 22px;
+  will-change: transform, opacity;
+}
+
+.media-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.media-thumb {
+  width: 170px;
+  aspect-ratio: 16 / 9;
+  flex-shrink: 0;
+  border: 3px solid var(--line);
+  border-radius: 14px;
+  background-color: var(--band2);
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.media-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.media-title {
+  font-size: 34px;
+  line-height: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--ink);
+}
+
+.media-meta {
+  margin-top: 10px;
+  font: 700 13px/1.3 "Open Sans", sans-serif;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink);
+  opacity: 0.78;
+  font-variant-numeric: tabular-nums;
+}
+
+.options-list {
+  margin-top: 20px;
+}
+
+.option-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 2px dashed var(--line);
+}
+
+.option-left {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.option-label {
+  font: 600 17px/1 "Josefin Sans", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+.option-size {
+  font: 600 13px/1 "Open Sans", sans-serif;
+  color: var(--ink);
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.dl-pill {
+  padding: 12px 24px 9px;
+  font-size: 15px;
+}
+
+/* Post grid */
+.post-head {
+  margin-bottom: 18px;
+}
+
+.post-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 14px;
+}
+
+.post-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.post-img {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 3px solid var(--line);
+  border-radius: 16px;
+  background-color: var(--band2);
+  background-size: cover;
+  background-position: center;
+}
+
+.post-tile .dl-pill {
+  width: 100%;
+  text-align: center;
+  padding: 11px 14px 8px;
+}
+
+.post-all-btn {
+  width: 100%;
+  margin-top: 18px;
+  text-align: center;
+}
+
+/* Song card */
+.song-layout {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.song-cover {
+  width: 160px;
+  height: 160px;
+  flex-shrink: 0;
+  border: 3px solid var(--line);
+  border-radius: 18px;
+  background-color: var(--band2);
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.song-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.song-artist {
+  font-size: 16px;
+}
+
+.song-title {
+  font-size: 44px;
+  line-height: 0.96;
+  margin-top: 10px;
+}
+
+.song-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.song-actions .pill {
+  padding: 13px 26px 10px;
+  font-size: 15px;
+}
+
+.nomatch-title {
+  font-size: 40px;
+  line-height: 1;
+}
+
+.nomatch-copy {
+  margin-top: 10px;
+  font: 600 14px/1.6 "Open Sans", sans-serif;
+  color: var(--ink);
+  opacity: 0.8;
+}
+
+.empty-tab-copy {
+  font: 600 15px/1.6 "Open Sans", sans-serif;
+  color: var(--ink);
+}
+
+/* Footer note */
+#terms {
+  font: 600 12.5px/1.7 "Open Sans", sans-serif;
+  opacity: 0.7;
+  margin-top: 48px;
+  color: var(--ink);
+  max-width: 620px;
+}
+
+/* Sea band */
+#sea {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--bandh);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.sea-svg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.sea-svg-back {
+  z-index: 1;
+}
+
+.sea-ship {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  transform-origin: 50% 100%;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.sea-svg-front {
+  z-index: 3;
+}
+
+.sea-chest {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 4;
+  background-repeat: no-repeat;
+  transform-origin: 50% 85%;
+  opacity: 0;
+  transform: scale(0.6);
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.sea-chest.is-ready {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* Responsive @media (max-width: 760px) */
+@media (max-width: 760px) {
+  :root {
+    --toph: 84px;
+  }
+
+  .frame {
+    inset: 8px;
+    border-radius: 22px;
+  }
+
+  .frame::after {
+    border-radius: 22px;
+  }
+
+  .brand-logo {
+    left: 20px;
+    top: 26px;
+    font-size: 22px;
+    gap: 7px;
+  }
+
+  .brand-logo svg {
+    width: 18px;
+    height: 21px;
+  }
+
+  .top-nav {
+    right: 20px;
+    top: 30px;
+    gap: 16px;
+  }
+
+  .nav-link {
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+  }
+
+  .nav-link.nav-terms {
+    display: none;
+  }
+
+  .nav-anchor {
+    display: none;
+  }
+
+  .sheet-inner {
+    padding: 20px 20px calc(var(--bandh) * 0.9);
+  }
+
+  .eb {
+    font-size: 16px;
+  }
+
+  .hero-title {
+    font-size: 54px;
+    margin-top: 16px;
+  }
+
+  .tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 28px;
+  }
+
+  .tabs .pill {
+    text-align: center;
+    padding: 14px 16px 11px;
+    font-size: 15px;
+  }
+
+  .field {
+    flex-direction: column;
+    align-items: stretch;
+    border-radius: 24px;
+    padding: 12px 14px 14px;
+    gap: 10px;
+    margin-top: 24px;
+  }
+
+  .field-input-wrap {
+    width: 100%;
+  }
+
+  .field-input {
+    width: 100%;
+    padding: 6px 4px;
+    font-size: 15px;
+  }
+
+  .field-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .field-submit.pill.solid {
+    flex: 1;
+    text-align: center;
+  }
+
+  .media-head {
+    flex-direction: column;
+  }
+
+  .media-thumb {
+    width: 100%;
+  }
+
+  .media-title {
+    font-size: 28px;
+  }
+
+  .song-layout {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .song-cover {
+    width: 130px;
+    height: 130px;
+  }
+
+  .song-title {
+    font-size: 34px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill,
+  .nav-anchor,
+  .mark,
+  .mark-underline line {
+    transition: none;
+  }
+}

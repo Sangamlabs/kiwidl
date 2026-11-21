@@ -1,0 +1,6 @@
+{
+  "name": "Saltwake Docks",
+  "description": "Paste a YouTube, Instagram, or Pinterest link, pick Video, Audio, Post, or Song, and download the file.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

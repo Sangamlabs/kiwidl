@@ -1,0 +1,12 @@
+[Unit]
+Description=Update yt-dlp, gallery-dl, and shazamio in KiwiAPI venv
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=kiwi
+Group=kiwi
+WorkingDirectory=/opt/kiwiapi/api
+ExecStart=/opt/kiwiapi/api/venv/bin/pip install --no-cache-dir -U yt-dlp gallery-dl shazamio
+ExecStartPost=+/usr/bin/systemctl restart kiwiapi.service

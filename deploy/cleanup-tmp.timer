@@ -1,0 +1,10 @@
+[Unit]
+Description=Run KiwiAPI temporary file cleanup every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=cleanup-tmp.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,11 @@
+tunnel: <TUNNEL-ID>
+credentials-file: /etc/cloudflared/<TUNNEL-ID>.json
+
+ingress:
+  - hostname: kiwiapi.net
+    service: http://127.0.0.1:8080
+  - hostname: dl.kiwiapi.net
+    service: http://127.0.0.1:8080
+  - hostname: api.kiwiapi.net
+    service: http://127.0.0.1:8000
+  - service: http_status:404
