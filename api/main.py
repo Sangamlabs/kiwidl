@@ -324,6 +324,7 @@ async def get_job_status(job_id: str, authenticated: bool = Depends(verify_api_k
 
 
 @app.get("/v1/files/{job_id}")
+@app.head("/v1/files/{job_id}")
 async def get_job_file(job_id: str):
     job = jobs.get(job_id)
     if not job or job.get("status") != "done":
