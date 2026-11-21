@@ -5,6 +5,7 @@ import subprocess
 import time
 import uuid
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -36,10 +37,54 @@ if not DEV_MODE and not API_KEYS and not WEB_KEY:
 
 TMP_DIR.mkdir(parents=True, exist_ok=True)
 
+
+# In-memory Rate Limiting for WEB_KEY (e.g. 60 requests per minute per IP)
+ip_request_timestamps: Dict[str, List[float]] = defaultdict(list)
+RATE_LIMIT_WINDOW = 60.0
+RATE_LIMIT_MAX = 60
+
+# In-memory Job Store
+jobs: Dict[str, dict] = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Background periodic cleanup loop (every 5 minutes, removes files > 30 minutes)
+    async def cleanup_loop():
+        while True:
+            await asyncio.sleep(300)
+            now = time.time()
+            cutoff = now - MAX_SECONDS
+            # 1. Clean temporary files/folders from disk
+            try:
+                for item in TMP_DIR.iterdir():
+                    try:
+                        mtime = item.stat().st_mtime
+                        if mtime < cutoff:
+                            if item.is_dir():
+                                shutil.rmtree(item, ignore_errors=True)
+                            else:
+                                item.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # 2. Clean expired entries from memory job store
+            expired = [jid for jid, info in list(jobs.items()) if info.get("created_at", 0) < cutoff]
+            for jid in expired:
+                jobs.pop(jid, None)
+
+    task = asyncio.create_task(cleanup_loop())
+    yield
+    task.cancel()
+
+
 app = FastAPI(
     title="KiwiAPI",
     version="1.0.0",
     description="High-performance media metadata, downloader and recognition API.",
+    lifespan=lifespan,
 )
 
 # CORS
@@ -50,14 +95,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# In-memory Rate Limiting for WEB_KEY (e.g. 60 requests per minute per IP)
-ip_request_timestamps: Dict[str, List[float]] = defaultdict(list)
-RATE_LIMIT_WINDOW = 60.0
-RATE_LIMIT_MAX = 60
-
-# In-memory Job Store
-jobs: Dict[str, dict] = {}
 
 
 def get_client_ip(request: Request) -> str:

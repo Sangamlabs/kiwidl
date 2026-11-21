@@ -1,0 +1,51 @@
+module.exports = {
+  apps: [
+    {
+      name: 'kiwiapi',
+      cwd: '/opt/kiwiapi/api',
+      script: '/opt/kiwiapi/api/venv/bin/uvicorn',
+      args: 'main:app --host 127.0.0.1 --port 8000 --workers 1',
+      interpreter: 'none',
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 2000,
+      env: {
+        PYTHONUNBUFFERED: '1',
+      },
+    },
+    {
+      name: 'caddy',
+      cwd: '/opt/kiwiapi',
+      script: 'caddy',
+      args: 'run --config /etc/caddy/Caddyfile',
+      interpreter: 'none',
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 2000,
+    },
+    {
+      name: 'cloudflared',
+      cwd: '/opt/kiwiapi',
+      script: 'cloudflared',
+      args: 'tunnel --config /etc/cloudflared/config.yml run',
+      interpreter: 'none',
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 3000,
+    },
+    {
+      name: 'kiwi-cleanup',
+      cwd: '/opt/kiwiapi',
+      script: '/opt/kiwiapi/deploy/cleanup_loop.sh',
+      interpreter: '/bin/bash',
+      autorestart: true,
+    },
+    {
+      name: 'kiwi-updater',
+      cwd: '/opt/kiwiapi',
+      script: '/opt/kiwiapi/deploy/updater_loop.sh',
+      interpreter: '/bin/bash',
+      autorestart: true,
+    },
+  ],
+};
