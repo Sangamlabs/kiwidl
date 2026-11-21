@@ -195,6 +195,7 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
         "no_warnings": True,
         "extract_flat": False,
         "format_sort": ["res", "fps", "vbr", "tbr", "size"],
+        "remote_components": ["ejs:github"],
     }
     node_path = shutil.which("node")
     if node_path:
@@ -322,6 +323,7 @@ def _run_download_task(job_id: str, url: str, media_type: str, quality: str):
         "quiet": True,
         "no_warnings": True,
         "outtmpl": str(job_dir / "%(title).50s.%(ext)s"),
+        "remote_components": ["ejs:github"],
     }
     node_path = shutil.which("node")
     if node_path:
