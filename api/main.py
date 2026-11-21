@@ -394,9 +394,6 @@ def _run_download_task(job_id: str, url: str, media_type: str, quality: str):
                 "size",
             ],
             "merge_output_format": "mp4",
-            "postprocessor_args": {
-                "ffmpeg": ["-c:v", "copy", "-c:a", "aac", "-b:a", "320k", "-movflags", "+faststart"]
-            },
         })
     else:  # image
         ydl_opts.update({
@@ -460,10 +457,12 @@ async def get_job_file(job_id: str):
     if not file_path or not Path(file_path).exists():
         raise HTTPException(status_code=404, detail="Prepared file not found on disk")
 
+    ext = Path(file_path).suffix.lower()
+    media_type = "video/mp4" if ext == ".mp4" else ("audio/mpeg" if ext == ".mp3" else "application/octet-stream")
     return FileResponse(
         path=file_path,
         filename=job.get("filename", "download"),
-        media_type="application/octet-stream",
+        media_type=media_type,
     )
 
 
@@ -488,17 +487,26 @@ async def recognize_song(
             with open(audio_path, "wb") as f:
                 f.write(content)
         elif url:
-            # Download short 15s audio clip
+            # Download short 20s audio clip
+            ytdlp_bin = sys.executable.replace("uvicorn", "yt-dlp")
+            if not Path(ytdlp_bin).exists():
+                ytdlp_bin = "/opt/kiwiapi/api/venv/bin/yt-dlp"
+            if not Path(ytdlp_bin).exists():
+                ytdlp_bin = "yt-dlp"
+
+            cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
             cmd = [
-                "yt-dlp",
+                ytdlp_bin,
                 "--quiet",
                 "--no-warnings",
                 "--extract-audio",
                 "--audio-format", "mp3",
-                "--postprocessor-args", "ffmpeg:-t 15",
+                "--postprocessor-args", "ffmpeg:-t 20",
                 "-o", str(rec_dir / "sample.%(ext)s"),
-                url.strip(),
             ]
+            if cookie_file.exists():
+                cmd.extend(["--cookies", str(cookie_file)])
+            cmd.append(url.strip())
             proc = await asyncio.create_subprocess_exec(*cmd)
             await proc.communicate()
 
