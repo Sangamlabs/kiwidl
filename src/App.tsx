@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   AnchorIcon,
+  ArrowRightIcon,
   CloseIcon,
   InstagramIcon,
   PinterestIcon,
@@ -9,11 +10,13 @@ import {
 import { ResultCard } from './components/ResultCard';
 import { SeaBand } from './components/SeaBand';
 import {
+  AnimeResult,
   DocksApiError,
   DownloadResult,
   MediaInfo,
   SongResult,
   fetchLinkInfo,
+  identifyAnime,
   isDemoMode,
   recognizeSong,
   runDownloadJob,
@@ -43,6 +46,7 @@ const TABS: readonly { id: TabId; label: string }[] = [
   { id: 'audio', label: 'Audio' },
   { id: 'post', label: 'Post' },
   { id: 'song', label: 'Song' },
+  { id: 'anime', label: 'Anime' },
 ];
 
 type StatusTone = 'normal' | 'ok' | 'err';
@@ -55,6 +59,8 @@ export default function App() {
   const [statusTone, setStatusTone] = useState<StatusTone>('normal');
   const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
   const [songResult, setSongResult] = useState<SongResult | null>(null);
+  const [animeResult, setAnimeResult] = useState<AnimeResult | null>(null);
+  const [isIdentifyingAnime, setIsIdentifyingAnime] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [lastDownload, setLastDownload] = useState<DownloadResult | null>(null);
   const [sheetScrolled, setSheetScrolled] = useState(false);
@@ -149,6 +155,7 @@ export default function App() {
         const { id, signal } = beginRequest();
         setMediaInfo(null);
         setSongResult(null);
+        setAnimeResult(null);
         setLastDownload(null);
         setPhaseWithClock('fetching');
         setStatusTone('normal');
@@ -176,6 +183,47 @@ export default function App() {
         return;
       }
 
+      if (targetTab === 'anime') {
+        if (!trimmed) {
+          setStatusTone('err');
+          setStatusText(COPY.emptyLink);
+          return;
+        }
+        const { id, signal } = beginRequest();
+        setMediaInfo(null);
+        setSongResult(null);
+        setAnimeResult(null);
+        setLastDownload(null);
+        setIsIdentifyingAnime(true);
+        setPhaseWithClock('fetching');
+        setStatusTone('normal');
+        setStatusText(COPY.scanningAnime || 'Scanning video scene for anime...');
+
+        try {
+          const result = await identifyAnime(trimmed, signal);
+          if (reqIdRef.current !== id) return;
+          setAnimeResult(result);
+          triggerCardEntrance();
+          setPhaseWithClock('ready');
+          setStatusTone(result.found ? 'ok' : 'err');
+          setStatusText(
+            result.found
+              ? `Found: ${result.title} (${result.episode})`
+              : result.message || 'No anime scene match found.'
+          );
+        } catch (err) {
+          if ((err as Error).name === 'AbortError' || reqIdRef.current !== id) return;
+          setPhaseWithClock('error');
+          setStatusTone('err');
+          setStatusText(
+            err instanceof DocksApiError ? err.message : COPY.network
+          );
+        } finally {
+          setIsIdentifyingAnime(false);
+        }
+        return;
+      }
+
       if (!trimmed) {
         setStatusTone('err');
         setStatusText(COPY.emptyLink);
@@ -186,6 +234,7 @@ export default function App() {
       if (!platform) {
         setMediaInfo(null);
         setSongResult(null);
+        setAnimeResult(null);
         setStatusTone('err');
         setStatusText(COPY.unsupportedLink);
         return;
@@ -194,6 +243,7 @@ export default function App() {
       const { id, signal } = beginRequest();
       setMediaInfo(null);
       setSongResult(null);
+      setAnimeResult(null);
       setLastDownload(null);
       setPhaseWithClock('fetching');
       setStatusTone('normal');
@@ -717,8 +767,15 @@ export default function App() {
   const placeholder =
     tab === 'song'
       ? 'Paste a link to a video or song clip'
+      : tab === 'anime'
+      ? 'Paste an Anime Reel, Short, TikTok, or YouTube link'
       : 'Paste a YouTube, Instagram or Pinterest link';
-  const submitLabel = tab === 'song' ? 'Find song' : 'Get links';
+  const submitLabel =
+    tab === 'song'
+      ? 'Find song'
+      : tab === 'anime'
+      ? 'Find Anime & Episode'
+      : 'Get links';
 
   return (
     <>
@@ -847,12 +904,29 @@ export default function App() {
                 >
                   Paste
                 </button>
+                {tab !== 'anime' && (
+                  <button
+                    type="button"
+                    className="anime-arrow-btn"
+                    disabled={phase === 'fetching' || isIdentifyingAnime}
+                    onClick={() => {
+                      setTab('anime');
+                      runFetch('anime', urlInput);
+                    }}
+                    title="Find Anime & Episode from this video"
+                    aria-label="Find Anime & Episode"
+                  >
+                    <span className="anime-arrow-emoji">🎌</span>
+                    <span className="anime-arrow-text">Anime</span>
+                    <ArrowRightIcon className="anime-arrow-icon" />
+                  </button>
+                )}
                 <button
                   type="submit"
                   className="pill solid field-submit"
-                  disabled={phase === 'fetching'}
+                  disabled={phase === 'fetching' || isIdentifyingAnime}
                 >
-                  {submitLabel}
+                  {isIdentifyingAnime ? 'Scanning...' : submitLabel}
                 </button>
               </div>
             </form>
@@ -933,6 +1007,7 @@ export default function App() {
                 tab={tab}
                 mediaInfo={mediaInfo}
                 songResult={songResult}
+                animeResult={animeResult}
                 isWorking={isWorking}
                 onDownload={(type, quality) => void handleDownload(type, quality)}
                 onDownloadAllImages={(count) =>

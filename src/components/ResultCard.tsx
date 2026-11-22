@@ -1,5 +1,5 @@
 import React from 'react';
-import { MediaInfo, SongResult } from '../lib/docksApi';
+import { AnimeResult, MediaInfo, SongResult } from '../lib/docksApi';
 import { COPY, TabId } from '../lib/docksLogic';
 import { PlatformIcon } from './Icons';
 
@@ -8,6 +8,7 @@ interface ResultCardProps {
   tab: TabId;
   mediaInfo: MediaInfo | null;
   songResult: SongResult | null;
+  animeResult?: AnimeResult | null;
   isWorking: boolean;
   onDownload: (type: 'video' | 'audio' | 'image', quality: string) => void;
   onDownloadAllImages: (count: number) => void;
@@ -19,11 +20,123 @@ export function ResultCard({
   tab,
   mediaInfo,
   songResult,
+  animeResult,
   isWorking,
   onDownload,
   onDownloadAllImages,
   onGetSongMp3,
 }: ResultCardProps) {
+  if (tab === 'anime' || animeResult) {
+    if (!animeResult) return null;
+
+    if (!animeResult.found) {
+      return (
+        <div className="result-card anime-card" ref={cardRef} data-testid="result-card">
+          <h2 className="nomatch-title">{COPY.noAnimeTitle}</h2>
+          <p className="nomatch-copy">{animeResult.message || COPY.noAnimeBody}</p>
+        </div>
+      );
+    }
+
+    const similarity = animeResult.similarity ?? 0;
+    const isLowConfidence = similarity < 85;
+
+    return (
+      <div className="result-card anime-card" ref={cardRef} data-testid="result-card">
+        <div className="anime-layout">
+          <div className="anime-preview-box">
+            {animeResult.previewVideo ? (
+              <video
+                src={animeResult.previewVideo}
+                poster={animeResult.previewImage}
+                autoPlay
+                muted
+                loop
+                playsInline
+                className="anime-preview-video"
+              />
+            ) : animeResult.previewImage ? (
+              <img
+                src={animeResult.previewImage}
+                alt={animeResult.title || 'Anime Preview'}
+                className="anime-preview-img"
+              />
+            ) : null}
+          </div>
+
+          <div className="anime-details">
+            <div className="anime-badge-row">
+              <span
+                className={`anime-confidence-badge ${isLowConfidence ? 'warning' : 'high'}`}
+              >
+                {isLowConfidence ? '⚠️ ' : '🎯 '}
+                {similarity.toFixed(1)}% Match
+                {isLowConfidence ? ' (Low Match)' : ''}
+              </span>
+              {animeResult.isAdult && (
+                <span className="anime-adult-badge">18+</span>
+              )}
+            </div>
+
+            {isLowConfidence && (
+              <div
+                style={{
+                  margin: '8px 0 12px',
+                  padding: '10px 14px',
+                  borderRadius: '12px',
+                  background: '#fef9c3',
+                  border: '1.5px dashed #ca8a04',
+                  fontSize: '13px',
+                  lineHeight: '1.4',
+                  color: '#854d0e',
+                }}
+              >
+                ⚠️ <strong>Uncertain Match:</strong> This clip appears to have template overlays (e.g. Twitter card), heavy color filters, or cropped framing. The title below is only an approximate visual guess. For 95%+ exact match, use a clean unedited clip.
+              </div>
+            )}
+
+            <h2 className="anime-title">{animeResult.title}</h2>
+
+            {animeResult.romajiTitle && animeResult.romajiTitle.toLowerCase() !== animeResult.title?.toLowerCase() && (
+              <div className="anime-romaji">
+                <span className="anime-label">Romaji:</span> {animeResult.romajiTitle}
+              </div>
+            )}
+
+            {animeResult.nativeTitle && (
+              <div className="anime-native">
+                <span className="anime-label">Japanese:</span> {animeResult.nativeTitle}
+              </div>
+            )}
+
+            <div className="anime-meta-grid">
+              <div className="anime-meta-item">
+                <span className="anime-meta-label">📺 Episode</span>
+                <span className="anime-meta-value">{animeResult.episode || 'N/A'}</span>
+              </div>
+              <div className="anime-meta-item">
+                <span className="anime-meta-label">⏱ Scene Time</span>
+                <span className="anime-meta-value">{animeResult.timestamp || '00:00'}</span>
+              </div>
+            </div>
+
+            {animeResult.previewVideo && (
+              <div className="anime-actions">
+                <a
+                  href={animeResult.previewVideo}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="pill solid"
+                >
+                  Open Full Scene Clip
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (tab === 'song') {
     if (!songResult) return null;
 

@@ -39,6 +39,23 @@ export interface SongResult {
   query?: string;
 }
 
+export interface AnimeResult {
+  found: boolean;
+  title?: string;
+  romajiTitle?: string;
+  nativeTitle?: string;
+  episode?: string;
+  timestamp?: string;
+  fromSeconds?: number;
+  toSeconds?: number;
+  similarity?: number;
+  previewVideo?: string;
+  previewImage?: string;
+  isAdult?: boolean;
+  confidenceWarning?: boolean;
+  message?: string;
+}
+
 export interface DownloadResult {
   downloadUrl: string;
   filename: string;
@@ -305,6 +322,47 @@ export async function recognizeSong(
 
   const data = (await res.json()) as SongResult;
   return data;
+}
+
+export async function identifyAnime(
+  url: string,
+  signal?: AbortSignal
+): Promise<AnimeResult> {
+  if (isDemoMode()) {
+    await sleep(2500, signal);
+    return {
+      found: true,
+      title: 'Jujutsu Kaisen Season 2',
+      romajiTitle: 'Jujutsu Kaisen 2nd Season',
+      nativeTitle: '呪術廻戦',
+      episode: 'Episode 17',
+      timestamp: '14:28',
+      similarity: 96.4,
+      previewVideo: 'https://api.trace.moe/video/demo',
+      previewImage: 'https://api.trace.moe/image/demo',
+      isAdult: false,
+      confidenceWarning: false,
+    };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/v1/identify-anime`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ url: url.trim() }),
+      signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') throw err;
+    throw new DocksApiError(COPY.network, null);
+  }
+
+  if (!res.ok) {
+    throw new DocksApiError(mapHttpErrorToMessage(res.status), res.status);
+  }
+
+  return (await res.json()) as AnimeResult;
 }
 
 async function pollJob(jobId: string, signal?: AbortSignal): Promise<string> {

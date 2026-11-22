@@ -1,4 +1,4 @@
-export type TabId = 'video' | 'audio' | 'post' | 'song';
+export type TabId = 'video' | 'audio' | 'post' | 'song' | 'anime';
 export type PlatformId = 'youtube' | 'instagram' | 'pinterest';
 export type Phase = 'idle' | 'fetching' | 'ready' | 'working' | 'done' | 'error';
 
@@ -30,6 +30,9 @@ export const COPY = {
   clipboardDenied: 'Clipboard unavailable. Paste the link into the field.',
   noMatchTitle: 'No match',
   noMatchBody: 'Try a longer clip with clear music and less talking.',
+  scanningAnime: 'Scanning video scene for anime...',
+  noAnimeTitle: 'No anime found',
+  noAnimeBody: 'No matching anime scene identified. Try a clip with a clearer, unedited scene.',
 } as const;
 
 export interface WaveLayer {

@@ -153,3 +153,21 @@ export function FallbackChestSvg() {
     </svg>
   );
 }
+
+export function ArrowRightIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <line x1="4" y1="10" x2="16" y2="10" />
+      <polyline points="11 5 16 10 11 15" />
+    </svg>
+  );
+}
