@@ -11,4 +11,6 @@ __pycache__/
 *.pyc
 tmp_downloads/
 tmp/
+*cookie*.txt
+cookies.txt
 

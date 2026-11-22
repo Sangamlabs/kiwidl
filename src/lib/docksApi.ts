@@ -260,6 +260,17 @@ export async function fetchLinkInfo(
   }
 
   if (!res.ok) {
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        const detailStr = String(errJson.detail).toLowerCase();
+        if (detailStr.includes('login page') || detailStr.includes('rate-limit') || detailStr.includes('redirected to the login')) {
+          throw new DocksApiError('Instagram is currently restricting anonymous access. Try another link or try again shortly.', res.status);
+        }
+      }
+    } catch (e) {
+      if (e instanceof DocksApiError) throw e;
+    }
     throw new DocksApiError(mapHttpErrorToMessage(res.status), res.status);
   }
 
@@ -317,6 +328,17 @@ export async function recognizeSong(
   }
 
   if (!res.ok) {
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        const detailStr = String(errJson.detail).toLowerCase();
+        if (detailStr.includes('login page') || detailStr.includes('rate-limit') || detailStr.includes('redirected to the login')) {
+          throw new DocksApiError('Instagram is currently restricting anonymous access. Try another link or try again shortly.', res.status);
+        }
+      }
+    } catch (e) {
+      if (e instanceof DocksApiError) throw e;
+    }
     throw new DocksApiError(mapHttpErrorToMessage(res.status), res.status);
   }
 
@@ -359,6 +381,17 @@ export async function identifyAnime(
   }
 
   if (!res.ok) {
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        const detailStr = String(errJson.detail).toLowerCase();
+        if (detailStr.includes('login page') || detailStr.includes('rate-limit') || detailStr.includes('redirected to the login')) {
+          throw new DocksApiError('Instagram is currently restricting anonymous access. Try another link or try again shortly.', res.status);
+        }
+      }
+    } catch (e) {
+      if (e instanceof DocksApiError) throw e;
+    }
     throw new DocksApiError(mapHttpErrorToMessage(res.status), res.status);
   }
 
@@ -452,6 +485,17 @@ export async function runDownloadJob(
   }
 
   if (!res.ok) {
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        const detailStr = String(errJson.detail).toLowerCase();
+        if (detailStr.includes('login page') || detailStr.includes('rate-limit') || detailStr.includes('redirected to the login')) {
+          throw new DocksApiError('Instagram is currently restricting anonymous access. Try another link or try again shortly.', res.status);
+        }
+      }
+    } catch (e) {
+      if (e instanceof DocksApiError) throw e;
+    }
     throw new DocksApiError(mapHttpErrorToMessage(res.status), res.status);
   }
 

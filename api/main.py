@@ -1,10 +1,15 @@
 import asyncio
+import http.cookiejar
+import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
+import urllib.request
 import uuid
+import zipfile
 
 # Crucial: strip PM2 IPC variable so child processes (like Deno JS challenge solver) don't crash
 os.environ.pop("NODE_CHANNEL_FD", None)
@@ -86,10 +91,140 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 
+API_DESCRIPTION = """
+## 🥝 KiwiAPI Developer Integration Guide
+
+KiwiAPI is a high-speed, asynchronous media metadata, download and recognition API supporting **YouTube, Instagram, TikTok, Pinterest, Twitter/X, Facebook**, and more.
+
+---
+
+### 🔑 Authentication
+All requests (except public static assets) require an API key passed via the header:
+```http
+X-API-Key: <YOUR_API_KEY>
+Content-Type: application/json
+```
+
+---
+
+### 🚀 Asynchronous Download Architecture (3 Steps)
+Media downloads are handled asynchronously so long video encodings (e.g., 1080p, 4K) never time out:
+
+1. **Get Media Information**: `POST /v1/info`
+   - Send `{ "url": "..." }`
+   - Returns media title, duration, author, thumbnail, and all available video/audio/image qualities.
+
+2. **Queue Download Job**: `POST /v1/download`
+   - Send `{ "url": "...", "type": "video", "quality": "720p" }`
+   - Returns `{ "id": "<job_id>", "job_id": "<job_id>" }` immediately.
+
+3. **Poll Status & Download**: `GET /v1/jobs/{job_id}`
+   - Poll every 1-2 seconds until status changes from `"running"` to `"done"`.
+   - When `"done"`, download the direct file stream at `GET /v1/files/{job_id}`.
+
+---
+
+### 🤖 Telegram Bot Integration (Python Example)
+```python
+import aiohttp
+import asyncio
+
+class KiwiDownloader:
+    def __init__(self, api_key: str, base_url: str = "https://api.kiwiapi.net"):
+        self.base_url = base_url.rstrip("/")
+        self.headers = {"X-API-Key": api_key, "Content-Type": "application/json"}
+
+    async def get_info(self, url: str) -> dict:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{self.base_url}/v1/info", json={"url": url}, headers=self.headers) as resp:
+                return await resp.json()
+
+    async def download_media(self, url: str, media_type: str = "video", quality: str = "720p") -> str:
+        async with aiohttp.ClientSession() as session:
+            # 1. Start Job
+            async with session.post(f"{self.base_url}/v1/download", 
+                                    json={"url": url, "type": media_type, "quality": quality}, 
+                                    headers=self.headers) as resp:
+                data = await resp.json()
+                job_id = data.get("job_id") or data.get("id")
+
+            # 2. Poll Status
+            for _ in range(30):
+                await asyncio.sleep(2)
+                async with session.get(f"{self.base_url}/v1/jobs/{job_id}", headers=self.headers) as status_resp:
+                    job = await status_resp.json()
+                    if job.get("status") == "done":
+                        return f"{self.base_url}/v1/files/{job_id}"
+                    elif job.get("status") == "failed":
+                        raise Exception(job.get("error", "Download failed"))
+
+            raise TimeoutError("Download timed out")
+```
+
+---
+
+### 🌐 Website / App Integration (JavaScript / Fetch)
+```javascript
+const KIWI_API = "https://api.kiwiapi.net";
+const API_KEY = "YOUR_API_KEY";
+
+// 1. Fetch info and available formats
+async function getMediaInfo(url) {
+  const res = await fetch(`${KIWI_API}/v1/info`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+    body: JSON.stringify({ url })
+  });
+  return await res.json();
+}
+
+// 2. Start Download and Poll
+async function downloadFile(url, type = "video", quality = "720p") {
+  const start = await fetch(`${KIWI_API}/v1/download`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+    body: JSON.stringify({ url, type, quality })
+  });
+  const { job_id } = await start.json();
+
+  while (true) {
+    await new Promise(r => setTimeout(r, 2000));
+    const poll = await fetch(`${KIWI_API}/v1/jobs/${job_id}`, {
+      headers: { "X-API-Key": API_KEY }
+    });
+    const data = await poll.json();
+    if (data.status === "done") {
+      window.location.href = `${KIWI_API}/v1/files/${job_id}`;
+      return;
+    } else if (data.status === "failed") {
+      throw new Error(data.error);
+    }
+  }
+}
+```
+
+---
+
+### ⚡ Quick cURL Test
+```bash
+# 1. Fetch Info
+curl -X POST https://api.kiwiapi.net/v1/info \\
+     -H "X-API-Key: YOUR_API_KEY" \\
+     -H "Content-Type: application/json" \\
+     -d '{"url":"https://www.instagram.com/reel/DgAaOG-PGSH/"}'
+
+# 2. Queue Download
+curl -X POST https://api.kiwiapi.net/v1/download \\
+     -H "X-API-Key: YOUR_API_KEY" \\
+     -H "Content-Type: application/json" \\
+     -d '{"url":"https://www.instagram.com/reel/DgAaOG-PGSH/","type":"video","quality":"720p"}'
+```
+"""
+
 app = FastAPI(
-    title="KiwiAPI",
+    title="KiwiAPI Documentation & Endpoints",
     version="1.0.0",
-    description="High-performance media metadata, downloader and recognition API.",
+    description=API_DESCRIPTION,
     lifespan=lifespan,
 )
 
@@ -172,6 +307,64 @@ def format_duration(seconds: Optional[float]) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def find_cookies_file() -> Optional[Path]:
+    cookie_paths = [
+        Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt")),
+        Path("cookies.txt"),
+        Path(__file__).resolve().parent / "cookies.txt",
+        Path(__file__).resolve().parent.parent / "cookies.txt",
+        Path("/opt/kiwiapi/cookies.txt"),
+        Path("/opt/kiwiapi/api/cookies.txt"),
+    ]
+    for cp in cookie_paths:
+        if cp.exists():
+            return cp
+    return None
+
+
+def id_to_pk(shortcode: str) -> int:
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    pk = 0
+    for char in shortcode:
+        pk = (pk * 64) + alphabet.index(char)
+    return pk
+
+
+def fetch_instagram_media_info_direct(shortcode: str, cookie_file: Optional[Path] = None) -> Optional[dict]:
+    try:
+        media_id = id_to_pk(shortcode)
+    except Exception:
+        return None
+
+    url = f"https://www.instagram.com/api/v1/media/{media_id}/info/"
+    headers = {
+        "X-IG-App-ID": "936619743392459",
+        "X-ASBD-ID": "129477",
+        "Origin": "https://www.instagram.com",
+        "Referer": f"https://www.instagram.com/p/{shortcode}/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+    }
+
+    try:
+        if cookie_file and cookie_file.exists():
+            cj = http.cookiejar.MozillaCookieJar(str(cookie_file))
+            cj.load(ignore_discard=True, ignore_expires=True)
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+        else:
+            opener = urllib.request.build_opener()
+
+        req = urllib.request.Request(url, headers=headers)
+        with opener.open(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            items = data.get("items", [])
+            if items:
+                return items[0]
+    except Exception as e:
+        logger.warning(f"Direct IG extraction failed for {shortcode}: {e}")
+    return None
+
+
 @app.get("/")
 def root():
     return {
@@ -192,6 +385,88 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
     url = payload.url.strip()
     if not url:
         raise HTTPException(status_code=400, detail="URL cannot be empty")
+
+    loop = asyncio.get_running_loop()
+    cp = find_cookies_file()
+
+    # Check for Instagram shortcode (post, reel, tv)
+    ig_shortcode = None
+    if "instagram.com" in url.lower() or "instagr.am" in url.lower():
+        m = re.search(r"/(?:p|reel|tv|stories)/([A-Za-z0-9_-]+)", url)
+        if m:
+            ig_shortcode = m.group(1)
+
+    # For Instagram photo/carousel posts, fetch directly from Instagram API
+    if ig_shortcode:
+        ig_item = await loop.run_in_executor(None, fetch_instagram_media_info_direct, ig_shortcode, cp)
+        if ig_item:
+            media_type = ig_item.get("media_type")  # 1 = photo, 2 = video, 8 = carousel
+            user = ig_item.get("user", {})
+            username = user.get("username", "instagram_user")
+            caption_obj = ig_item.get("caption") or {}
+            caption_text = caption_obj.get("text", "")
+            title = caption_text[:60].strip() if caption_text else f"Post by {username}"
+
+            image_options = []
+            video_options = []
+
+            if media_type == 1:
+                # Single photo post
+                candidates = ig_item.get("image_versions2", {}).get("candidates", [])
+                best_img = candidates[0].get("url", "") if candidates else ""
+                thumbnail = best_img
+                if best_img:
+                    w = candidates[0].get("width", 1080)
+                    h = candidates[0].get("height", 1350)
+                    image_options.append({
+                        "label": "Original JPG Plate",
+                        "size": f"{w}x{h} HD",
+                        "url": best_img,
+                    })
+                return {
+                    "title": title,
+                    "author": username,
+                    "duration": "",
+                    "thumbnail": thumbnail,
+                    "video": [],
+                    "audio": [],
+                    "images": image_options,
+                }
+            elif media_type == 8:
+                # Carousel post
+                carousel = ig_item.get("carousel_media", [])
+                thumbnail = ""
+                for idx, c in enumerate(carousel, start=1):
+                    c_type = c.get("media_type")
+                    if c_type == 1:
+                        c_candidates = c.get("image_versions2", {}).get("candidates", [])
+                        if c_candidates:
+                            c_url = c_candidates[0].get("url", "")
+                            if not thumbnail:
+                                thumbnail = c_url
+                            w = c_candidates[0].get("width", 1080)
+                            h = c_candidates[0].get("height", 1350)
+                            image_options.append({
+                                "label": f"Plate {idx:02d}",
+                                "size": f"{w}x{h} HD",
+                                "url": c_url,
+                            })
+                    elif c_type == 2:
+                        vids = c.get("video_versions", [])
+                        if vids:
+                            video_options.append({
+                                "label": f"Video Clip {idx:02d} (720p)",
+                                "size": "HD MP4",
+                            })
+                return {
+                    "title": title,
+                    "author": username,
+                    "duration": "",
+                    "thumbnail": thumbnail,
+                    "video": video_options,
+                    "audio": [],
+                    "images": image_options,
+                }
 
     import yt_dlp
 
@@ -214,13 +489,8 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
     if Path(deno_path).exists():
         ydl_opts["js_runtimes"] = {"deno": {"path": str(deno_path)}}
 
-    cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
-    if not cookie_file.exists():
-        cookie_file = Path("cookies.txt")
-    if cookie_file.exists():
-        ydl_opts["cookiefile"] = str(cookie_file)
-
-    loop = asyncio.get_running_loop()
+    if cp:
+        ydl_opts["cookiefile"] = str(cp)
 
     def _extract():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -229,6 +499,25 @@ async def get_media_info(payload: InfoRequest, authenticated: bool = Depends(ver
     try:
         info = await loop.run_in_executor(None, _extract)
     except Exception as e:
+        # Fallback for Instagram if yt-dlp threw 'No video formats found'
+        if ig_shortcode:
+            ig_item = await loop.run_in_executor(None, fetch_instagram_media_info_direct, ig_shortcode, cp)
+            if ig_item:
+                user = ig_item.get("user", {})
+                username = user.get("username", "instagram_user")
+                caption_obj = ig_item.get("caption") or {}
+                title = caption_obj.get("text", "")[:60].strip() or f"Post by {username}"
+                candidates = ig_item.get("image_versions2", {}).get("candidates", [])
+                thumb = candidates[0].get("url", "") if candidates else ""
+                return {
+                    "title": title,
+                    "author": username,
+                    "duration": "",
+                    "thumbnail": thumb,
+                    "video": [],
+                    "audio": [],
+                    "images": [{"label": "Original JPG Plate", "size": "HD", "url": thumb}] if thumb else [],
+                }
         raise HTTPException(status_code=400, detail=f"Could not extract info: {str(e)}")
 
     if not info:
@@ -330,6 +619,64 @@ def _run_download_task(job_id: str, url: str, media_type: str, quality: str):
     job_dir.mkdir(parents=True, exist_ok=True)
     jobs[job_id]["status"] = "running"
 
+    cp = find_cookies_file()
+
+    # Direct Instagram photo/carousel download
+    ig_shortcode = None
+    if "instagram.com" in url.lower() or "instagr.am" in url.lower():
+        m = re.search(r"/(?:p|reel|tv|stories)/([A-Za-z0-9_-]+)", url)
+        if m:
+            ig_shortcode = m.group(1)
+
+    if ig_shortcode:
+        ig_item = fetch_instagram_media_info_direct(ig_shortcode, cp)
+        if ig_item:
+            ig_type = ig_item.get("media_type")
+            # If media_type is photo (1) or carousel (8), or user requested image
+            if ig_type in (1, 8) or media_type == "image":
+                clean_user = "".join(c for c in (ig_item.get("user", {}).get("username") or "instagram") if c.isalnum() or c in " _-")[:25]
+                try:
+                    if ig_type == 1:
+                        candidates = ig_item.get("image_versions2", {}).get("candidates", [])
+                        if candidates:
+                            img_url = candidates[0]["url"]
+                            out_file = job_dir / f"{clean_user}_{ig_shortcode}.jpg"
+                            req_img = urllib.request.Request(img_url, headers={"User-Agent": "Mozilla/5.0"})
+                            with urllib.request.urlopen(req_img, timeout=25) as resp, open(out_file, "wb") as f_out:
+                                shutil.copyfileobj(resp, f_out)
+                            jobs[job_id]["status"] = "done"
+                            jobs[job_id]["file_path"] = str(out_file)
+                            jobs[job_id]["filename"] = out_file.name
+                            return
+                    elif ig_type == 8:
+                        carousel = ig_item.get("carousel_media", [])
+                        downloaded_files = []
+                        for idx, c in enumerate(carousel, start=1):
+                            c_candidates = c.get("image_versions2", {}).get("candidates", [])
+                            if c_candidates:
+                                c_url = c_candidates[0]["url"]
+                                plate_file = job_dir / f"{clean_user}_{ig_shortcode}_plate_{idx:02d}.jpg"
+                                req_img = urllib.request.Request(c_url, headers={"User-Agent": "Mozilla/5.0"})
+                                with urllib.request.urlopen(req_img, timeout=25) as resp, open(plate_file, "wb") as f_out:
+                                    shutil.copyfileobj(resp, f_out)
+                                downloaded_files.append(plate_file)
+
+                        if downloaded_files:
+                            if len(downloaded_files) == 1:
+                                final_file = downloaded_files[0]
+                            else:
+                                zip_file = job_dir / f"{clean_user}_{ig_shortcode}_photos.zip"
+                                with zipfile.ZipFile(zip_file, "w", zipfile.ZIP_DEFLATED) as zf:
+                                    for df in downloaded_files:
+                                        zf.write(df, arcname=df.name)
+                                final_file = zip_file
+                            jobs[job_id]["status"] = "done"
+                            jobs[job_id]["file_path"] = str(final_file)
+                            jobs[job_id]["filename"] = final_file.name
+                            return
+                except Exception as ex:
+                    logger.warning(f"Direct IG photo download fallback to yt-dlp: {ex}")
+
     import yt_dlp
 
     ydl_opts = {
@@ -348,11 +695,8 @@ def _run_download_task(job_id: str, url: str, media_type: str, quality: str):
     if Path(deno_path).exists():
         ydl_opts["js_runtimes"] = {"deno": {"path": str(deno_path)}}
 
-    cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
-    if not cookie_file.exists():
-        cookie_file = Path("cookies.txt")
-    if cookie_file.exists():
-        ydl_opts["cookiefile"] = str(cookie_file)
+    if cp:
+        ydl_opts["cookiefile"] = str(cp)
 
     aria2_path = shutil.which("aria2c")
     if aria2_path and ("youtube" in url.lower() or "youtu.be" in url.lower()):

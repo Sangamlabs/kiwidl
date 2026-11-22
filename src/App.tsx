@@ -7,6 +7,7 @@ import {
   PinterestIcon,
   YouTubeIcon,
 } from './components/Icons';
+import { ApiDocsModal } from './components/ApiDocsModal';
 import { ResultCard } from './components/ResultCard';
 import { SeaBand } from './components/SeaBand';
 import {
@@ -64,6 +65,7 @@ export default function App() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [lastDownload, setLastDownload] = useState<DownloadResult | null>(null);
   const [sheetScrolled, setSheetScrolled] = useState(false);
+  const [isDocsOpen, setIsDocsOpen] = useState(false);
 
   const detectedPlatform: PlatformId | null = detectPlatform(urlInput);
 
@@ -802,10 +804,13 @@ export default function App() {
               <span>Home</span>
             </a>
             <a
-              href="https://api.kiwiapi.net/docs"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="#api"
+              onClick={(e) => {
+                e.preventDefault();
+                setIsDocsOpen(true);
+              }}
               className="nav-link"
+              title="Open KiwiAPI Documentation"
             >
               <AnchorIcon className="nav-anchor" />
               <span>API</span>
@@ -1024,9 +1029,21 @@ export default function App() {
             </div>
 
             <footer id="terms">
-              Only download content you own or have permission to use. Private and
-              DRM-protected content is not supported. Files are deleted after 30
-              minutes.
+              <p>
+                Only download content you own or have permission to use. Private and
+                DRM-protected content is not supported. Files are deleted after 30
+                minutes.
+              </p>
+              <div style={{ marginTop: '12px' }}>
+                <button
+                  type="button"
+                  className="pill"
+                  style={{ padding: '8px 16px 6px', fontSize: '13px' }}
+                  onClick={() => setIsDocsOpen(true)}
+                >
+                  🥝 Developer API & Docs
+                </button>
+              </div>
             </footer>
           </div>
         </main>
@@ -1046,6 +1063,9 @@ export default function App() {
           onChestClick={handleChestClick}
         />
       </div>
+
+      {/* API Documentation Modal */}
+      <ApiDocsModal isOpen={isDocsOpen} onClose={() => setIsDocsOpen(false)} />
 
       {/* Black ring cursor & click ping */}
       <div id="cur" ref={curRef} aria-hidden="true" />
