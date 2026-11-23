@@ -42,6 +42,24 @@ TMP_DIR = Path(os.getenv("TMP_DIR", "/var/lib/kiwiapi/tmp"))
 MAX_SECONDS = int(os.getenv("MAX_SECONDS", "1800"))
 DEV_MODE = os.getenv("DEV", "0") == "1"
 
+# Gemini Multimodal AI Key (gemini-2.5-flash for Anime & Clip Recognition)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
+try:
+    from google import genai
+    from google.genai import types
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+    genai = None
+    types = None
+
+if GEMINI_API_KEY and GENAI_AVAILABLE:
+    logger.info("Gemini AI API configured for Hybrid Anime Identification (gemini-2.5-flash)")
+elif not GEMINI_API_KEY:
+    logger.warning("GEMINI_API_KEY not configured - anime identification will use visual trace.moe pipeline")
+else:
+    logger.warning("google-genai package not available - anime identification will use visual trace.moe pipeline")
+
 # Refuse startup if keys are not configured (unless DEV=1)
 if not DEV_MODE and not API_KEYS and not WEB_KEY:
     raise RuntimeError("KiwiAPI startup aborted: Both API_KEYS and WEB_KEY are empty in .env")
@@ -941,6 +959,59 @@ class AnimeRequest(BaseModel):
     url: str
 
 
+class GeminiAnimeDetection(BaseModel):
+    animeTitle: str
+    alternativeTitle: Optional[str] = ""
+    episodeNumber: Optional[int] = None
+    episodeConfidence: str = "estimated"  # exact | estimated | movie
+    characters: List[str] = []
+    sceneSummary: str = ""
+    isAnime: bool = True
+
+
+def _fetch_anilist_info(title: str) -> Optional[dict]:
+    """
+    Query AniList GraphQL API for official cover art, banner, episode count, and AniList ID.
+    """
+    if not title or not title.strip():
+        return None
+    query = """
+    query ($search: String) {
+      Media (search: $search, type: ANIME) {
+        id
+        idMal
+        title {
+          romaji
+          english
+          native
+        }
+        episodes
+        coverImage {
+          extraLarge
+          large
+          medium
+        }
+        bannerImage
+        isAdult
+        genres
+      }
+    }
+    """
+    try:
+        import requests
+        resp = requests.post(
+            "https://graphql.anilist.co",
+            json={"query": query, "variables": {"search": title.strip()}},
+            headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "KiwiAPI/2.0"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("data", {}).get("Media")
+    except Exception as e:
+        logger.warning(f"AniList query failed for '{title}': {e}")
+    return None
+
+
 @app.post("/v1/identify-anime")
 @app.post("/api/identify-anime")
 async def identify_anime_endpoint(
@@ -948,7 +1019,11 @@ async def identify_anime_endpoint(
     authenticated: bool = Depends(verify_api_key),
 ):
     """
-    Identify Anime & Episode using fast frame extraction and trace.moe
+    Hybrid Anime Identification Pipeline:
+    1. Google Gemini 2.5 Flash Multimodal (Visual + Audio) for accurate anime series, characters, episode & scene.
+    2. AniList GraphQL API for official metadata, banner & cover art.
+    3. trace.moe scoped to anilistID for exact timestamp and scene preview clip.
+    4. Resilient fallback to multi-frame FFmpeg color normalization & crop if Gemini is unconfigured or unavailable.
     """
     url = ""
     content_type = request.headers.get("content-type", "")
@@ -969,11 +1044,49 @@ async def identify_anime_endpoint(
         )
 
     loop = asyncio.get_running_loop()
+    frame_dir = TMP_DIR / f"anime_batch_{uuid.uuid4().hex[:8]}_{int(time.time() * 1000)}"
+    frame_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Fast direct stream URL & duration extraction (worst/best lowest bitrate for speed)
+    def _extract_frame(stream_or_file: str, sec: float, out_path: Path, vf: Optional[str] = None):
+        cmd = [
+            "ffmpeg",
+            "-ss", f"{sec:.2f}",
+            "-i", str(stream_or_file),
+        ]
+        if vf:
+            cmd.extend(["-vf", vf])
+        cmd.extend([
+            "-vframes", "1",
+            "-q:v", "2",
+            "-y", str(out_path),
+        ])
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+    def _query_trace_moe(frame_file: Path, anilist_id: Optional[int] = None) -> List[dict]:
+        import requests
+        if not frame_file.exists() or frame_file.stat().st_size < 400:
+            return []
+        url = "https://api.trace.moe/search?cutBorders"
+        if anilist_id:
+            url += f"&anilistID={anilist_id}"
+        else:
+            url += "&anilistInfo"
+        try:
+            with open(frame_file, "rb") as f:
+                res = requests.post(
+                    url,
+                    files={"image": ("frame.jpg", f, "image/jpeg")},
+                    timeout=15,
+                )
+            if res.status_code == 200:
+                data = res.json()
+                return data.get("result", [])
+        except Exception as ex:
+            logger.warning(f"trace.moe query error: {ex}")
+        return []
+
     def _get_stream_and_duration(target_url: str):
         import yt_dlp
-
         ydl_opts = {
             "skip_download": True,
             "quiet": True,
@@ -999,61 +1112,115 @@ async def identify_anime_endpoint(
             info = ydl.extract_info(target_url, download=False)
             if not info:
                 return None, 0.0
-            duration = float(info.get("duration") or 0.0)
+            dur = float(info.get("duration") or 0.0)
             stream = info.get("url")
             if not stream:
                 for f in info.get("formats", []):
                     if f.get("url") and f.get("vcodec") != "none":
                         stream = f["url"]
                         break
-            return stream, duration
+            return stream, dur
 
-    try:
-        stream_url, duration = await loop.run_in_executor(None, _get_stream_and_duration, url)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not extract video stream: {str(e)}")
+    def _download_lowres_video(target_url: str, out_file: Path) -> tuple[Optional[Path], float]:
+        import yt_dlp
+        cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
+        if not cookie_file.exists():
+            cookie_file = Path("cookies.txt")
 
-    if not stream_url:
-        raise HTTPException(status_code=404, detail="No playable video stream found at this URL")
+        ydl_opts = {
+            "outtmpl": str(out_file),
+            "format": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/worst[ext=mp4]/worst/best",
+            "quiet": True,
+            "no_warnings": True,
+            "max_filesize": 25 * 1024 * 1024,
+            "remote_components": ["ejs:github"],
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["web_embedded", "tv", "mweb"],
+                }
+            },
+        }
+        if cookie_file.exists():
+            ydl_opts["cookiefile"] = str(cookie_file)
+        deno_path = shutil.which("deno") or "/usr/local/bin/deno"
+        if Path(deno_path).exists():
+            ydl_opts["js_runtimes"] = {"deno": {"path": str(deno_path)}}
 
-    # 2. Multi-Frame Extraction & FFmpeg Filter Passes
-    frame_dir = TMP_DIR / f"anime_batch_{uuid.uuid4().hex[:8]}_{int(time.time() * 1000)}"
-    frame_dir.mkdir(parents=True, exist_ok=True)
-
-    def _extract_frame(stream: str, sec: float, out_path: Path, vf: Optional[str] = None):
-        cmd = [
-            "ffmpeg",
-            "-ss", f"{sec:.2f}",
-            "-i", stream,
-        ]
-        if vf:
-            cmd.extend(["-vf", vf])
-        cmd.extend([
-            "-vframes", "1",
-            "-q:v", "2",
-            "-y", str(out_path),
-        ])
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-
-    def _query_trace_moe(frame_file: Path) -> List[dict]:
-        import requests
-        if not frame_file.exists() or frame_file.stat().st_size < 400:
-            return []
         try:
-            with open(frame_file, "rb") as f:
-                res = requests.post(
-                    "https://api.trace.moe/search?anilistInfo&cutBorders",
-                    files={"image": ("frame.jpg", f, "image/jpeg")},
-                    timeout=15,
-                )
-            if res.status_code == 200:
-                data = res.json()
-                return data.get("result", [])
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(target_url, download=True)
+                dur = float(info.get("duration") or 0.0) if info else 0.0
+                if out_file.exists() and out_file.stat().st_size > 1000:
+                    return out_file, dur
+                matches = list(out_file.parent.glob(f"{out_file.stem}*"))
+                for m in matches:
+                    if m.is_file() and m.stat().st_size > 1000:
+                        return m, dur
         except Exception as ex:
-            logger.warning(f"trace.moe query error: {ex}")
-        return []
+            logger.warning(f"Low-res download via yt-dlp failed: {ex}")
+        return None, 0.0
 
-    def _run_recognition_pipeline(stream: str, vid_duration: float, out_dir: Path) -> List[dict]:
+    def _run_gemini_multimodal(video_file: Path) -> Optional[dict]:
+        if not GEMINI_API_KEY or not GENAI_AVAILABLE:
+            return None
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        file_ref = None
+        try:
+            logger.info(f"Uploading clip ({video_file.stat().st_size} bytes) to Gemini Files API...")
+            file_ref = client.files.upload(file=str(video_file))
+
+            # Poll until file is processed and ACTIVE
+            for _ in range(40):
+                f_info = client.files.get(name=file_ref.name)
+                state_val = getattr(f_info.state, "name", str(f_info.state))
+                if state_val == "ACTIVE":
+                    break
+                elif state_val == "FAILED":
+                    raise RuntimeError("Gemini file upload processing failed")
+                time.sleep(1)
+
+            prompt = (
+                "Analyze both the visuals and audio/dialogue of this anime clip. "
+                "Ignore any color grading (CC filters), horizontal mirroring/flipping, background music edits, "
+                "or social media meme text overlays. Identify the exact anime series, season/arc, main characters visible, "
+                "the exact or estimated episode number, and what is happening in the scene."
+            )
+
+            # Try requested gemini-2.5-flash first, and fallback gracefully if deprecated/overloaded
+            candidate_models = ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]
+            response = None
+            last_err = None
+            for model_name in candidate_models:
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[file_ref, prompt],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=GeminiAnimeDetection,
+                            temperature=0.2,
+                        ),
+                    )
+                    if response and response.text:
+                        logger.info(f"Gemini identification succeeded using model '{model_name}'")
+                        return json.loads(response.text)
+                except Exception as model_err:
+                    last_err = model_err
+                    logger.warning(f"Model '{model_name}' failed: {model_err}, trying next candidate...")
+
+            if last_err:
+                raise last_err
+        except Exception as ex:
+            logger.error(f"Gemini anime multimodal call failed: {ex}")
+        finally:
+            if file_ref:
+                try:
+                    client.files.delete(name=file_ref.name)
+                except Exception:
+                    pass
+        return None
+
+    def _run_fallback_trace_pipeline(stream: str, vid_duration: float, out_dir: Path) -> List[dict]:
         # Calculate 3 frame timestamps (25%, 50%, 75% duration)
         if vid_duration and vid_duration > 1.5:
             t1 = max(0.5, vid_duration * 0.25)
@@ -1065,8 +1232,6 @@ async def identify_anime_endpoint(
             t3 = 5.0
 
         all_results: List[dict] = []
-
-        # Pass 1: Extract 3 base frames
         f_25 = out_dir / "frame_25.jpg"
         f_50 = out_dir / "frame_50.jpg"
         f_75 = out_dir / "frame_75.jpg"
@@ -1084,23 +1249,21 @@ async def identify_anime_endpoint(
 
         # Pass 2: If initial similarity < 0.85, apply Meme Template Crop & Color Normalization
         if best_sim < 0.85:
-            # 1. Center-crop middle frame to strip Twitter/meme white headers & bottom watermarks
-            # -vf "crop=iw:ih*0.65:0:ih*0.25"
+            # Center-crop middle frame to strip Twitter/meme headers & watermarks
             f_crop = out_dir / "frame_crop_50.jpg"
             _extract_frame(stream, t2, f_crop, vf="crop=iw:ih*0.65:0:ih*0.25")
             res_crop = _query_trace_moe(f_crop)
             if res_crop:
                 all_results.extend(res_crop)
 
-            # 2. FFmpeg Color Normalization to neutralize heavy CC filters / tints
-            # -vf "normalize=blackpt=black:whitept=white:smoothing=50"
+            # Color Normalization to neutralize heavy CC filters / tints
             f_norm = out_dir / "frame_norm_50.jpg"
             _extract_frame(stream, t2, f_norm, vf="normalize=blackpt=black:whitept=white:smoothing=50")
             res_norm = _query_trace_moe(f_norm)
             if res_norm:
                 all_results.extend(res_norm)
 
-            # 3. Crop + Color Normalization combined
+            # Crop + Color Normalization combined
             f_crop_norm = out_dir / "frame_crop_norm_50.jpg"
             _extract_frame(stream, t2, f_crop_norm, vf="crop=iw:ih*0.65:0:ih*0.25,normalize=blackpt=black:whitept=white:smoothing=50")
             res_crop_norm = _query_trace_moe(f_crop_norm)
@@ -1110,15 +1273,156 @@ async def identify_anime_endpoint(
         return all_results
 
     try:
-        raw_results = await loop.run_in_executor(None, _run_recognition_pipeline, stream_url, duration, frame_dir)
+        # Step 1: Attempt fast low-res clip download (with audio) for Gemini Multimodal Analysis
+        temp_video_path = frame_dir / f"clip_{uuid.uuid4().hex[:6]}.mp4"
+        downloaded_clip, duration = await loop.run_in_executor(None, _download_lowres_video, url, temp_video_path)
 
+        stream_url = ""
+        if not downloaded_clip:
+            # Fall back to extracting direct stream URL
+            try:
+                stream_url, duration = await loop.run_in_executor(None, _get_stream_and_duration, url)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not extract video stream: {str(e)}")
+
+        # Step 2: If Gemini AI is configured, run Gemini Multimodal Identification
+        ai_data: Optional[dict] = None
+        if GEMINI_API_KEY and GENAI_AVAILABLE and downloaded_clip and downloaded_clip.exists():
+            ai_data = await loop.run_in_executor(None, _run_gemini_multimodal, downloaded_clip)
+
+        if ai_data:
+            if not ai_data.get("isAnime", True):
+                return {
+                    "found": False,
+                    "message": "This video does not appear to be an anime clip.",
+                }
+
+            anime_title = ai_data.get("animeTitle", "").strip()
+            alt_title = ai_data.get("alternativeTitle", "").strip()
+
+            # Query AniList GraphQL for metadata & AniList ID
+            anilist = await loop.run_in_executor(None, _fetch_anilist_info, anime_title)
+            if not anilist and alt_title:
+                anilist = await loop.run_in_executor(None, _fetch_anilist_info, alt_title)
+
+            anilist_id = anilist.get("id") if anilist else None
+            title_obj = (anilist.get("title", {}) or {}) if anilist else {}
+            english_title = title_obj.get("english") or anime_title
+            romaji_title = title_obj.get("romaji") or alt_title or anime_title
+            native_title = title_obj.get("native") or ""
+            cover_image = (
+                (anilist.get("coverImage", {}) or {}).get("extraLarge")
+                or (anilist.get("coverImage", {}) or {}).get("large")
+                or ""
+            ) if anilist else ""
+            banner_image = anilist.get("bannerImage") or "" if anilist else ""
+            is_adult = bool(anilist.get("isAdult", False)) if anilist else False
+
+            # Extract 1 middle frame for trace.moe exact timestamp verification
+            mid_sec = max(1.0, duration * 0.50) if duration > 1.5 else 1.5
+            mid_frame = frame_dir / "mid_frame.jpg"
+            _extract_frame(str(downloaded_clip), mid_sec, mid_frame)
+
+            trace_matches: List[dict] = []
+            if anilist_id:
+                trace_matches = await loop.run_in_executor(None, _query_trace_moe, mid_frame, anilist_id)
+
+            timestamp_verified = False
+            from_sec = 0.0
+            to_sec = 0.0
+            timestamp_str = "Scene from clip"
+            preview_video = ""
+            preview_image = cover_image
+            similarity = 96.0
+
+            if trace_matches and trace_matches[0].get("similarity", 0) >= 0.78:
+                top_trace = trace_matches[0]
+                timestamp_verified = True
+                similarity = round(top_trace.get("similarity", 0.96) * 100, 1)
+                from_sec = float(top_trace.get("from", 0.0))
+                to_sec = float(top_trace.get("to", 0.0))
+                m, s = divmod(int(from_sec), 60)
+                timestamp_str = f"{m:02d}:{s:02d}"
+                preview_video = top_trace.get("video") or ""
+                preview_image = top_trace.get("image") or cover_image
+                if top_trace.get("episode") is not None:
+                    ep_val = top_trace["episode"]
+                    episode_str = f"Episode {ep_val}"
+                else:
+                    episode_str = f"Episode {ai_data.get('episodeNumber')}" if ai_data.get("episodeNumber") else "Movie / Special / OVA"
+            else:
+                ep_num = ai_data.get("episodeNumber")
+                if ep_num:
+                    episode_str = f"Episode {ep_num}"
+                else:
+                    episode_str = "Movie / Special / OVA"
+
+            primary_res = {
+                "title": english_title,
+                "romajiTitle": romaji_title,
+                "nativeTitle": native_title,
+                "episode": episode_str,
+                "episodeNumber": ai_data.get("episodeNumber"),
+                "episodeConfidence": ai_data.get("episodeConfidence", "estimated"),
+                "timestampVerified": timestamp_verified,
+                "timestamp": timestamp_str,
+                "fromSeconds": from_sec,
+                "toSeconds": to_sec,
+                "similarity": similarity,
+                "previewVideo": preview_video,
+                "previewImage": preview_image,
+                "coverImage": cover_image,
+                "bannerImage": banner_image,
+                "characters": ai_data.get("characters", []),
+                "sceneSummary": ai_data.get("sceneSummary", ""),
+                "isAdult": is_adult,
+                "confidenceWarning": False,
+            }
+
+            matches_list = [primary_res]
+            if len(trace_matches) > 1:
+                for extra in trace_matches[1:3]:
+                    if extra.get("similarity", 0) >= 0.75:
+                        efrom = float(extra.get("from", 0.0))
+                        em, es = divmod(int(efrom), 60)
+                        matches_list.append({
+                            "title": english_title,
+                            "romajiTitle": romaji_title,
+                            "nativeTitle": native_title,
+                            "episode": f"Episode {extra.get('episode')}" if extra.get("episode") is not None else episode_str,
+                            "timestamp": f"{em:02d}:{es:02d}",
+                            "fromSeconds": efrom,
+                            "toSeconds": float(extra.get("to", 0.0)),
+                            "similarity": round(extra.get("similarity", 0) * 100, 1),
+                            "previewVideo": extra.get("video") or "",
+                            "previewImage": extra.get("image") or cover_image,
+                            "coverImage": cover_image,
+                            "bannerImage": banner_image,
+                            "characters": ai_data.get("characters", []),
+                            "sceneSummary": ai_data.get("sceneSummary", ""),
+                            "isAdult": is_adult,
+                            "confidenceWarning": False,
+                        })
+
+            return {
+                "found": True,
+                **primary_res,
+                "matches": matches_list,
+            }
+
+        # Step 3: Resilient Visual Trace.moe Pipeline (Multi-Frame + Normalization + Meme Crop)
+        source_target = str(downloaded_clip) if (downloaded_clip and downloaded_clip.exists()) else stream_url
+        if not source_target:
+            raise HTTPException(status_code=404, detail="No playable video stream found at this URL")
+
+        raw_results = await loop.run_in_executor(None, _run_fallback_trace_pipeline, source_target, duration, frame_dir)
         if not raw_results:
             return {
                 "found": False,
                 "message": "No matching anime scene identified in this video clip.",
             }
 
-        # Deduplicate results across all frames by anilist.id, keeping the highest similarity match
+        # Deduplicate results across all frames by anilist.id
         unique_matches: Dict[str, dict] = {}
         for r in raw_results:
             anilist = r.get("anilist")
@@ -1140,7 +1444,6 @@ async def identify_anime_endpoint(
                 "message": "No matching anime scene identified in this video clip.",
             }
 
-        # Collect Top 3 distinct anime matches
         top_3 = sorted_results[:3]
         formatted_matches = []
         for top in top_3:
@@ -1162,8 +1465,8 @@ async def identify_anime_endpoint(
             ep_raw = top.get("episode")
             episode = f"Episode {ep_raw}" if ep_raw is not None else "Movie / Special / OVA"
 
-            from_sec = top.get("from", 0)
-            to_sec = top.get("to", 0)
+            from_sec = float(top.get("from", 0.0))
+            to_sec = float(top.get("to", 0.0))
             m, s = divmod(int(from_sec), 60)
             timestamp = f"{m:02d}:{s:02d}"
 
@@ -1182,9 +1485,24 @@ async def identify_anime_endpoint(
                 "similarity": similarity,
                 "previewVideo": preview_video,
                 "previewImage": preview_image,
+                "coverImage": "",
+                "bannerImage": "",
                 "isAdult": is_adult,
                 "confidenceWarning": similarity < 85.0,
             })
+
+        # Enrich primary match with AniList coverImage and bannerImage if available
+        if formatted_matches:
+            primary_info = await loop.run_in_executor(None, _fetch_anilist_info, formatted_matches[0]["title"])
+            if primary_info:
+                cov = (
+                    (primary_info.get("coverImage", {}) or {}).get("extraLarge")
+                    or (primary_info.get("coverImage", {}) or {}).get("large")
+                    or ""
+                )
+                ban = primary_info.get("bannerImage") or ""
+                formatted_matches[0]["coverImage"] = cov
+                formatted_matches[0]["bannerImage"] = ban
 
         primary = formatted_matches[0]
         return {
@@ -1199,6 +1517,8 @@ async def identify_anime_endpoint(
             "similarity": primary["similarity"],
             "previewVideo": primary["previewVideo"],
             "previewImage": primary["previewImage"],
+            "coverImage": primary.get("coverImage", ""),
+            "bannerImage": primary.get("bannerImage", ""),
             "isAdult": primary["isAdult"],
             "confidenceWarning": primary["confidenceWarning"],
             "matches": formatted_matches,

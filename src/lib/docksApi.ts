@@ -44,12 +44,19 @@ export interface AnimeMatchItem {
   romajiTitle?: string;
   nativeTitle?: string;
   episode?: string;
+  episodeNumber?: number;
+  episodeConfidence?: string;
+  timestampVerified?: boolean;
   timestamp?: string;
   fromSeconds?: number;
   toSeconds?: number;
   similarity: number;
   previewVideo?: string;
   previewImage?: string;
+  coverImage?: string;
+  bannerImage?: string;
+  characters?: string[];
+  sceneSummary?: string;
   isAdult?: boolean;
   confidenceWarning?: boolean;
 }
@@ -60,12 +67,19 @@ export interface AnimeResult {
   romajiTitle?: string;
   nativeTitle?: string;
   episode?: string;
+  episodeNumber?: number;
+  episodeConfidence?: string;
+  timestampVerified?: boolean;
   timestamp?: string;
   fromSeconds?: number;
   toSeconds?: number;
   similarity?: number;
   previewVideo?: string;
   previewImage?: string;
+  coverImage?: string;
+  bannerImage?: string;
+  characters?: string[];
+  sceneSummary?: string;
   isAdult?: boolean;
   confidenceWarning?: boolean;
   message?: string;
@@ -373,9 +387,16 @@ export async function identifyAnime(
       title: 'Jujutsu Kaisen Season 2',
       romajiTitle: 'Jujutsu Kaisen 2nd Season',
       nativeTitle: '呪術廻戦',
+      coverImage: 'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx145064-hSNRJM03pvv1.jpg',
+      bannerImage: 'https://s4.anilist.co/file/anilistcdn/media/anime/banner/145064-esDtAY2He7sk.jpg',
       episode: 'Episode 17',
+      episodeNumber: 17,
+      episodeConfidence: 'exact',
+      timestampVerified: true,
       timestamp: '14:28',
       similarity: 96.4,
+      characters: ['Satoru Gojo', 'Sukuna', 'Megumi Fushiguro'],
+      sceneSummary: 'Sukuna unleashes his Malevolent Shrine domain expansion across Shibuya.',
       previewVideo: 'https://api.trace.moe/video/demo',
       previewImage: 'https://api.trace.moe/image/demo',
       isAdult: false,
@@ -385,9 +406,15 @@ export async function identifyAnime(
           title: 'Jujutsu Kaisen Season 2',
           romajiTitle: 'Jujutsu Kaisen 2nd Season',
           nativeTitle: '呪術廻戦',
+          coverImage: 'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx145064-hSNRJM03pvv1.jpg',
           episode: 'Episode 17',
+          episodeNumber: 17,
+          episodeConfidence: 'exact',
+          timestampVerified: true,
           timestamp: '14:28',
           similarity: 96.4,
+          characters: ['Satoru Gojo', 'Sukuna'],
+          sceneSummary: 'Sukuna unleashes his Malevolent Shrine domain expansion across Shibuya.',
           previewVideo: 'https://api.trace.moe/video/demo',
           previewImage: 'https://api.trace.moe/image/demo',
           isAdult: false,

@@ -44,24 +44,36 @@ export function ResultCard({
     return (
       <div className="result-card anime-card" ref={cardRef} data-testid="result-card">
         <div className="anime-layout">
-          <div className="anime-preview-box">
-            {animeResult.previewVideo ? (
-              <video
-                src={animeResult.previewVideo}
-                poster={animeResult.previewImage}
-                autoPlay
-                muted
-                loop
-                playsInline
-                className="anime-preview-video"
-              />
-            ) : animeResult.previewImage ? (
-              <img
-                src={animeResult.previewImage}
-                alt={animeResult.title || 'Anime Preview'}
-                className="anime-preview-img"
-              />
-            ) : null}
+          <div className="anime-media-col">
+            <div className="anime-preview-box">
+              {animeResult.previewVideo ? (
+                <video
+                  src={animeResult.previewVideo}
+                  poster={animeResult.previewImage || animeResult.coverImage}
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  className="anime-preview-video"
+                />
+              ) : (animeResult.previewImage || animeResult.coverImage) ? (
+                <img
+                  src={animeResult.previewImage || animeResult.coverImage}
+                  alt={animeResult.title || 'Anime Preview'}
+                  className="anime-preview-img"
+                />
+              ) : null}
+            </div>
+            {animeResult.coverImage && animeResult.previewVideo && (
+              <div className="anime-cover-box">
+                <img
+                  src={animeResult.coverImage}
+                  alt={animeResult.title || 'Official Cover'}
+                  className="anime-cover-img"
+                />
+                <span className="anime-cover-badge">AniList Official</span>
+              </div>
+            )}
           </div>
 
           <div className="anime-details">
@@ -73,6 +85,15 @@ export function ResultCard({
                 {similarity.toFixed(1)}% Match
                 {isLowConfidence ? ' (Low Match)' : ''}
               </span>
+              {animeResult.timestampVerified ? (
+                <span className="anime-verified-badge exact">
+                  ✓ Exact Scene Verified
+                </span>
+              ) : animeResult.episodeConfidence ? (
+                <span className="anime-verified-badge ai">
+                  🤖 AI Detected ({animeResult.episodeConfidence})
+                </span>
+              ) : null}
               {animeResult.isAdult && (
                 <span className="anime-adult-badge">18+</span>
               )}
@@ -116,22 +137,55 @@ export function ResultCard({
               </div>
               <div className="anime-meta-item">
                 <span className="anime-meta-label">⏱ Scene Time</span>
-                <span className="anime-meta-value">{animeResult.timestamp || '00:00'}</span>
+                <span className="anime-meta-value">{animeResult.timestamp || 'Scene from clip'}</span>
               </div>
             </div>
 
-            {animeResult.previewVideo && (
-              <div className="anime-actions">
+            {/* Detected Characters */}
+            {animeResult.characters && animeResult.characters.length > 0 && (
+              <div className="anime-chars-box">
+                <span className="anime-chars-label">👥 Characters:</span>
+                <div className="anime-chars-list">
+                  {animeResult.characters.map((char, idx) => (
+                    <span className="anime-char-tag" key={idx}>
+                      {char}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Scene Summary */}
+            {animeResult.sceneSummary && (
+              <div className="anime-summary-box">
+                <span className="anime-summary-label">📝 Scene Description:</span>
+                <p className="anime-summary-text">{animeResult.sceneSummary}</p>
+              </div>
+            )}
+
+            <div className="anime-actions">
+              {animeResult.previewVideo && (
                 <a
                   href={animeResult.previewVideo}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="pill solid"
                 >
-                  Open Full Scene Clip
+                  Open Full Scene Clip ↗
                 </a>
-              </div>
-            )}
+              )}
+              {animeResult.coverImage && (
+                <a
+                  href={animeResult.coverImage}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="pill"
+                  style={{ marginLeft: animeResult.previewVideo ? '8px' : '0' }}
+                >
+                  View Cover Poster ↗
+                </a>
+              )}
+            </div>
           </div>
         </div>
 
@@ -154,16 +208,16 @@ export function ResultCard({
                     {alt.previewVideo ? (
                       <video
                         src={alt.previewVideo}
-                        poster={alt.previewImage}
+                        poster={alt.previewImage || alt.coverImage}
                         autoPlay
                         muted
                         loop
                         playsInline
                         className="anime-alt-video"
                       />
-                    ) : alt.previewImage ? (
+                    ) : (alt.previewImage || alt.coverImage) ? (
                       <img
-                        src={alt.previewImage}
+                        src={alt.previewImage || alt.coverImage}
                         alt={alt.title}
                         className="anime-alt-img"
                       />
