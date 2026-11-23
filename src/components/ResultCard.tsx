@@ -134,6 +134,74 @@ export function ResultCard({
             )}
           </div>
         </div>
+
+        {/* Fallback Section: Other Possible Matches (when confidence < 88%) */}
+        {similarity < 88 && animeResult.matches && animeResult.matches.length > 1 && (
+          <div className="anime-alternatives">
+            <div className="anime-alt-header">
+              <div className="anime-alt-badge-wrap">
+                <span className="anime-alt-badge">💡 Alternate Detections</span>
+              </div>
+              <h3 className="anime-alt-title">Not this one? Other possible matches:</h3>
+              <p className="anime-alt-subtitle">
+                Heavy color grading, top/bottom meme text, or crop framing can skew matches. Check these other detections:
+              </p>
+            </div>
+            <div className="anime-alt-grid">
+              {animeResult.matches.slice(1, 3).map((alt, idx) => (
+                <div className="anime-alt-card" key={`${alt.title}-${idx}`}>
+                  <div className="anime-alt-media">
+                    {alt.previewVideo ? (
+                      <video
+                        src={alt.previewVideo}
+                        poster={alt.previewImage}
+                        autoPlay
+                        muted
+                        loop
+                        playsInline
+                        className="anime-alt-video"
+                      />
+                    ) : alt.previewImage ? (
+                      <img
+                        src={alt.previewImage}
+                        alt={alt.title}
+                        className="anime-alt-img"
+                      />
+                    ) : null}
+                    <span
+                      className={`anime-confidence-badge ${
+                        alt.similarity < 85 ? 'warning' : 'high'
+                      } anime-alt-conf`}
+                    >
+                      {alt.similarity.toFixed(1)}% Match
+                    </span>
+                  </div>
+                  <div className="anime-alt-info">
+                    <h4 className="anime-alt-name">{alt.title}</h4>
+                    {alt.romajiTitle &&
+                      alt.romajiTitle.toLowerCase() !== alt.title.toLowerCase() && (
+                        <div className="anime-alt-romaji">{alt.romajiTitle}</div>
+                      )}
+                    <div className="anime-alt-meta">
+                      <span>📺 {alt.episode || 'N/A'}</span>
+                      <span>⏱ {alt.timestamp || '00:00'}</span>
+                    </div>
+                    {alt.previewVideo && (
+                      <a
+                        href={alt.previewVideo}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="pill anime-alt-btn"
+                      >
+                        Open Clip ↗
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   }

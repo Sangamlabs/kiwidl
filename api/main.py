@@ -970,8 +970,8 @@ async def identify_anime_endpoint(
 
     loop = asyncio.get_running_loop()
 
-    # 1. Fast direct stream URL extraction (worst/best lowest bitrate for speed)
-    def _get_stream_url(target_url: str) -> Optional[str]:
+    # 1. Fast direct stream URL & duration extraction (worst/best lowest bitrate for speed)
+    def _get_stream_and_duration(target_url: str):
         import yt_dlp
 
         ydl_opts = {
@@ -998,127 +998,214 @@ async def identify_anime_endpoint(
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(target_url, download=False)
             if not info:
-                return None
+                return None, 0.0
+            duration = float(info.get("duration") or 0.0)
             stream = info.get("url")
             if not stream:
                 for f in info.get("formats", []):
                     if f.get("url") and f.get("vcodec") != "none":
                         stream = f["url"]
                         break
-            return stream
+            return stream, duration
 
     try:
-        stream_url = await loop.run_in_executor(None, _get_stream_url, url)
+        stream_url, duration = await loop.run_in_executor(None, _get_stream_and_duration, url)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not extract video stream: {str(e)}")
 
     if not stream_url:
         raise HTTPException(status_code=404, detail="No playable video stream found at this URL")
 
-    # 2. Smart Frame Extraction via FFmpeg at 00:00:03 (fallback 00:00:01)
-    temp_frame = TMP_DIR / f"anime_frame_{uuid.uuid4().hex[:12]}_{int(time.time() * 1000)}.jpg"
+    # 2. Multi-Frame Extraction & FFmpeg Filter Passes
+    frame_dir = TMP_DIR / f"anime_batch_{uuid.uuid4().hex[:8]}_{int(time.time() * 1000)}"
+    frame_dir.mkdir(parents=True, exist_ok=True)
 
-    def _extract_frame(stream: str, out_path: Path):
+    def _extract_frame(stream: str, sec: float, out_path: Path, vf: Optional[str] = None):
         cmd = [
             "ffmpeg",
-            "-ss", "00:00:03",
+            "-ss", f"{sec:.2f}",
             "-i", stream,
+        ]
+        if vf:
+            cmd.extend(["-vf", vf])
+        cmd.extend([
             "-vframes", "1",
             "-q:v", "2",
             "-y", str(out_path),
-        ]
+        ])
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        if not out_path.exists() or out_path.stat().st_size < 500:
-            cmd_fallback = [
-                "ffmpeg",
-                "-ss", "00:00:01",
-                "-i", stream,
-                "-vframes", "1",
-                "-q:v", "2",
-                "-y", str(out_path),
-            ]
-            subprocess.run(cmd_fallback, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
-    try:
-        await loop.run_in_executor(None, _extract_frame, stream_url, temp_frame)
-        if not temp_frame.exists() or temp_frame.stat().st_size < 500:
-            raise HTTPException(status_code=500, detail="Failed to capture scene frame from video")
-
-        # 3. Query trace.moe API with cutBorders and anilistInfo
-        def _query_trace_moe(frame_file: Path):
-            import requests
-
+    def _query_trace_moe(frame_file: Path) -> List[dict]:
+        import requests
+        if not frame_file.exists() or frame_file.stat().st_size < 400:
+            return []
+        try:
             with open(frame_file, "rb") as f:
                 res = requests.post(
                     "https://api.trace.moe/search?anilistInfo&cutBorders",
                     files={"image": ("frame.jpg", f, "image/jpeg")},
                     timeout=15,
                 )
-            return res
+            if res.status_code == 200:
+                data = res.json()
+                return data.get("result", [])
+        except Exception as ex:
+            logger.warning(f"trace.moe query error: {ex}")
+        return []
 
-        res = await loop.run_in_executor(None, _query_trace_moe, temp_frame)
-        if res.status_code != 200:
-            raise HTTPException(
-                status_code=res.status_code,
-                detail=f"Anime recognition service responded with error: {res.text}",
-            )
+    def _run_recognition_pipeline(stream: str, vid_duration: float, out_dir: Path) -> List[dict]:
+        # Calculate 3 frame timestamps (25%, 50%, 75% duration)
+        if vid_duration and vid_duration > 1.5:
+            t1 = max(0.5, vid_duration * 0.25)
+            t2 = max(1.0, vid_duration * 0.50)
+            t3 = max(1.5, min(vid_duration - 0.5, vid_duration * 0.75))
+        else:
+            t1 = 1.0
+            t2 = 3.0
+            t3 = 5.0
 
-        data = res.json()
-        results = data.get("result", [])
-        if not results:
+        all_results: List[dict] = []
+
+        # Pass 1: Extract 3 base frames
+        f_25 = out_dir / "frame_25.jpg"
+        f_50 = out_dir / "frame_50.jpg"
+        f_75 = out_dir / "frame_75.jpg"
+
+        _extract_frame(stream, t1, f_25)
+        _extract_frame(stream, t2, f_50)
+        _extract_frame(stream, t3, f_75)
+
+        for f in (f_50, f_25, f_75):
+            res_list = _query_trace_moe(f)
+            if res_list:
+                all_results.extend(res_list)
+
+        best_sim = max((r.get("similarity", 0) for r in all_results), default=0.0)
+
+        # Pass 2: If initial similarity < 0.85, apply Meme Template Crop & Color Normalization
+        if best_sim < 0.85:
+            # 1. Center-crop middle frame to strip Twitter/meme white headers & bottom watermarks
+            # -vf "crop=iw:ih*0.65:0:ih*0.25"
+            f_crop = out_dir / "frame_crop_50.jpg"
+            _extract_frame(stream, t2, f_crop, vf="crop=iw:ih*0.65:0:ih*0.25")
+            res_crop = _query_trace_moe(f_crop)
+            if res_crop:
+                all_results.extend(res_crop)
+
+            # 2. FFmpeg Color Normalization to neutralize heavy CC filters / tints
+            # -vf "normalize=blackpt=black:whitept=white:smoothing=50"
+            f_norm = out_dir / "frame_norm_50.jpg"
+            _extract_frame(stream, t2, f_norm, vf="normalize=blackpt=black:whitept=white:smoothing=50")
+            res_norm = _query_trace_moe(f_norm)
+            if res_norm:
+                all_results.extend(res_norm)
+
+            # 3. Crop + Color Normalization combined
+            f_crop_norm = out_dir / "frame_crop_norm_50.jpg"
+            _extract_frame(stream, t2, f_crop_norm, vf="crop=iw:ih*0.65:0:ih*0.25,normalize=blackpt=black:whitept=white:smoothing=50")
+            res_crop_norm = _query_trace_moe(f_crop_norm)
+            if res_crop_norm:
+                all_results.extend(res_crop_norm)
+
+        return all_results
+
+    try:
+        raw_results = await loop.run_in_executor(None, _run_recognition_pipeline, stream_url, duration, frame_dir)
+
+        if not raw_results:
             return {
                 "found": False,
                 "message": "No matching anime scene identified in this video clip.",
             }
 
-        top = results[0]
-        similarity_raw = top.get("similarity", 0)
-        similarity = round(similarity_raw * 100, 1)
+        # Deduplicate results across all frames by anilist.id, keeping the highest similarity match
+        unique_matches: Dict[str, dict] = {}
+        for r in raw_results:
+            anilist = r.get("anilist")
+            if isinstance(anilist, dict) and anilist.get("id"):
+                key = str(anilist["id"])
+            elif anilist and not isinstance(anilist, dict):
+                key = str(anilist)
+            else:
+                key = r.get("filename") or str(uuid.uuid4())
 
-        anilist = top.get("anilist") or {}
-        title_obj = anilist.get("title", {}) if isinstance(anilist, dict) else {}
+            sim = r.get("similarity", 0)
+            if key not in unique_matches or sim > unique_matches[key].get("similarity", 0):
+                unique_matches[key] = r
 
-        # English title fallback to Romaji title
-        title = (
-            title_obj.get("english")
-            or title_obj.get("romaji")
-            or title_obj.get("native")
-            or "Unknown Anime"
-        )
-        romaji_title = title_obj.get("romaji") or ""
-        native_title = title_obj.get("native") or ""
+        sorted_results = sorted(unique_matches.values(), key=lambda x: x.get("similarity", 0), reverse=True)
+        if not sorted_results:
+            return {
+                "found": False,
+                "message": "No matching anime scene identified in this video clip.",
+            }
 
-        ep_raw = top.get("episode")
-        episode = f"Episode {ep_raw}" if ep_raw is not None else "Movie / Special / OVA"
+        # Collect Top 3 distinct anime matches
+        top_3 = sorted_results[:3]
+        formatted_matches = []
+        for top in top_3:
+            sim_raw = top.get("similarity", 0)
+            similarity = round(sim_raw * 100, 1)
 
-        from_sec = top.get("from", 0)
-        to_sec = top.get("to", 0)
-        m, s = divmod(int(from_sec), 60)
-        timestamp = f"{m:02d}:{s:02d}"
+            anilist = top.get("anilist") or {}
+            title_obj = anilist.get("title", {}) if isinstance(anilist, dict) else {}
 
-        preview_video = top.get("video") or ""
-        preview_image = top.get("image") or ""
-        is_adult = bool(anilist.get("isAdult", False))
+            title = (
+                title_obj.get("english")
+                or title_obj.get("romaji")
+                or title_obj.get("native")
+                or (top.get("filename") or "Unknown Anime").split("] ")[-1].split(" - ")[0]
+            )
+            romaji_title = title_obj.get("romaji") or ""
+            native_title = title_obj.get("native") or ""
 
+            ep_raw = top.get("episode")
+            episode = f"Episode {ep_raw}" if ep_raw is not None else "Movie / Special / OVA"
+
+            from_sec = top.get("from", 0)
+            to_sec = top.get("to", 0)
+            m, s = divmod(int(from_sec), 60)
+            timestamp = f"{m:02d}:{s:02d}"
+
+            preview_video = top.get("video") or ""
+            preview_image = top.get("image") or ""
+            is_adult = bool(anilist.get("isAdult", False)) if isinstance(anilist, dict) else False
+
+            formatted_matches.append({
+                "title": title,
+                "romajiTitle": romaji_title,
+                "nativeTitle": native_title,
+                "episode": episode,
+                "timestamp": timestamp,
+                "fromSeconds": from_sec,
+                "toSeconds": to_sec,
+                "similarity": similarity,
+                "previewVideo": preview_video,
+                "previewImage": preview_image,
+                "isAdult": is_adult,
+                "confidenceWarning": similarity < 85.0,
+            })
+
+        primary = formatted_matches[0]
         return {
             "found": True,
-            "title": title,
-            "romajiTitle": romaji_title,
-            "nativeTitle": native_title,
-            "episode": episode,
-            "timestamp": timestamp,
-            "fromSeconds": from_sec,
-            "toSeconds": to_sec,
-            "similarity": similarity,
-            "previewVideo": preview_video,
-            "previewImage": preview_image,
-            "isAdult": is_adult,
-            "confidenceWarning": similarity < 85.0,
+            "title": primary["title"],
+            "romajiTitle": primary["romajiTitle"],
+            "nativeTitle": primary["nativeTitle"],
+            "episode": primary["episode"],
+            "timestamp": primary["timestamp"],
+            "fromSeconds": primary["fromSeconds"],
+            "toSeconds": primary["toSeconds"],
+            "similarity": primary["similarity"],
+            "previewVideo": primary["previewVideo"],
+            "previewImage": primary["previewImage"],
+            "isAdult": primary["isAdult"],
+            "confidenceWarning": primary["confidenceWarning"],
+            "matches": formatted_matches,
         }
     finally:
         try:
-            if temp_frame.exists():
-                temp_frame.unlink()
+            shutil.rmtree(frame_dir, ignore_errors=True)
         except Exception:
             pass
 

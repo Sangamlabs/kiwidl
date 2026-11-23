@@ -39,6 +39,21 @@ export interface SongResult {
   query?: string;
 }
 
+export interface AnimeMatchItem {
+  title: string;
+  romajiTitle?: string;
+  nativeTitle?: string;
+  episode?: string;
+  timestamp?: string;
+  fromSeconds?: number;
+  toSeconds?: number;
+  similarity: number;
+  previewVideo?: string;
+  previewImage?: string;
+  isAdult?: boolean;
+  confidenceWarning?: boolean;
+}
+
 export interface AnimeResult {
   found: boolean;
   title?: string;
@@ -54,6 +69,7 @@ export interface AnimeResult {
   isAdult?: boolean;
   confidenceWarning?: boolean;
   message?: string;
+  matches?: AnimeMatchItem[];
 }
 
 export interface DownloadResult {
@@ -364,6 +380,44 @@ export async function identifyAnime(
       previewImage: 'https://api.trace.moe/image/demo',
       isAdult: false,
       confidenceWarning: false,
+      matches: [
+        {
+          title: 'Jujutsu Kaisen Season 2',
+          romajiTitle: 'Jujutsu Kaisen 2nd Season',
+          nativeTitle: '呪術廻戦',
+          episode: 'Episode 17',
+          timestamp: '14:28',
+          similarity: 96.4,
+          previewVideo: 'https://api.trace.moe/video/demo',
+          previewImage: 'https://api.trace.moe/image/demo',
+          isAdult: false,
+          confidenceWarning: false,
+        },
+        {
+          title: 'Chainsaw Man',
+          romajiTitle: 'Chainsaw Man',
+          nativeTitle: 'チェンソーマン',
+          episode: 'Episode 8',
+          timestamp: '11:05',
+          similarity: 82.5,
+          previewVideo: 'https://api.trace.moe/video/demo2',
+          previewImage: 'https://api.trace.moe/image/demo2',
+          isAdult: false,
+          confidenceWarning: true,
+        },
+        {
+          title: 'Bleach: Thousand-Year Blood War',
+          romajiTitle: 'Bleach: Sennen Kessen-hen',
+          nativeTitle: 'BLEACH 千年血戦篇',
+          episode: 'Episode 6',
+          timestamp: '19:42',
+          similarity: 79.1,
+          previewVideo: 'https://api.trace.moe/video/demo3',
+          previewImage: 'https://api.trace.moe/image/demo3',
+          isAdult: false,
+          confidenceWarning: true,
+        },
+      ],
     };
   }
 
