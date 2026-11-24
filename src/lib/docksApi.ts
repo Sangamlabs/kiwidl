@@ -86,6 +86,25 @@ export interface AnimeResult {
   matches?: AnimeMatchItem[];
 }
 
+export interface TranscriptSegment {
+  start: string;
+  end: string;
+  text: string;
+}
+
+export interface TranscriptResult {
+  success: boolean;
+  title?: string;
+  duration?: number;
+  language?: string;
+  source?: string;
+  summary?: string;
+  text: string;
+  segments: TranscriptSegment[];
+  srt?: string;
+  message?: string;
+}
+
 export interface DownloadResult {
   downloadUrl: string;
   filename: string;
@@ -477,6 +496,62 @@ export async function identifyAnime(
   }
 
   return (await res.json()) as AnimeResult;
+}
+
+export async function getTranscript(
+  url: string,
+  signal?: AbortSignal
+): Promise<TranscriptResult> {
+  if (isDemoMode()) {
+    await sleep(1500, signal);
+    return {
+      success: true,
+      title: 'Rick Astley - Never Gonna Give You Up (Official Music Video)',
+      duration: 213,
+      language: 'en',
+      source: 'native_subtitles',
+      summary: 'Iconic pop song discussing loyalty, dedication, and everlasting love.',
+      text: "We're no strangers to love. You know the rules and so do I. A full commitment's what I'm thinking of.",
+      segments: [
+        { start: '00:01', end: '00:03', text: '[♪ Music ♪]' },
+        { start: '00:18', end: '00:22', text: "We're no strangers to love" },
+        { start: '00:22', end: '00:27', text: 'You know the rules and so do I' },
+        { start: '00:27', end: '00:31', text: "A full commitment's what I'm thinking of" },
+        { start: '00:31', end: '00:35', text: "You wouldn't get this from any other guy" },
+        { start: '00:35', end: '00:39', text: 'I just wanna tell you how I am feeling' },
+        { start: '00:39', end: '00:43', text: 'Gotta make you understand' },
+        { start: '00:43', end: '00:47', text: 'Never gonna give you up, never gonna let you down' },
+      ],
+      srt: "1\n00:00:18,000 --> 00:00:22,000\nWe're no strangers to love\n\n2\n00:00:22,000 --> 00:00:27,000\nYou know the rules and so do I\n",
+    };
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/v1/transcript`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ url: url.trim() }),
+      signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === 'AbortError') throw err;
+    throw new DocksApiError(COPY.network, null);
+  }
+
+  if (!res.ok) {
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        throw new DocksApiError(String(errJson.detail), res.status);
+      }
+    } catch (e) {
+      if (e instanceof DocksApiError) throw e;
+    }
+    throw new DocksApiError(mapHttpErrorToMessage(res.status), res.status);
+  }
+
+  return (await res.json()) as TranscriptResult;
 }
 
 async function pollJob(jobId: string, signal?: AbortSignal): Promise<string> {

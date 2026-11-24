@@ -1,5 +1,5 @@
-import React from 'react';
-import { AnimeResult, MediaInfo, SongResult } from '../lib/docksApi';
+import React, { useState } from 'react';
+import { AnimeResult, MediaInfo, SongResult, TranscriptResult } from '../lib/docksApi';
 import { COPY, TabId } from '../lib/docksLogic';
 import { PlatformIcon } from './Icons';
 
@@ -9,10 +9,12 @@ interface ResultCardProps {
   mediaInfo: MediaInfo | null;
   songResult: SongResult | null;
   animeResult?: AnimeResult | null;
+  transcriptResult?: TranscriptResult | null;
   isWorking: boolean;
   onDownload: (type: 'video' | 'audio' | 'image', quality: string) => void;
   onDownloadAllImages: (count: number) => void;
   onGetSongMp3: () => void;
+  onGetTranscript?: (url: string) => void;
 }
 
 export function ResultCard({
@@ -21,11 +23,144 @@ export function ResultCard({
   mediaInfo,
   songResult,
   animeResult,
+  transcriptResult,
   isWorking,
   onDownload,
   onDownloadAllImages,
   onGetSongMp3,
+  onGetTranscript,
 }: ResultCardProps) {
+  const [showTimestamps, setShowTimestamps] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyTranscript = () => {
+    if (!transcriptResult) return;
+    const content = showTimestamps && transcriptResult.segments?.length
+      ? transcriptResult.segments.map((s) => `[${s.start}] ${s.text}`).join('\n')
+      : (transcriptResult.text || transcriptResult.segments.map((s) => s.text).join(' '));
+    navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleDownloadTxt = () => {
+    if (!transcriptResult) return;
+    const content = showTimestamps && transcriptResult.segments?.length
+      ? transcriptResult.segments.map((s) => `[${s.start}] ${s.text}`).join('\n')
+      : (transcriptResult.text || transcriptResult.segments.map((s) => s.text).join(' '));
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(transcriptResult.title || 'transcript').replace(/[^a-zA-Z0-9_-]/g, '_')}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadSrt = () => {
+    if (!transcriptResult || !transcriptResult.srt) return;
+    const blob = new Blob([transcriptResult.srt], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(transcriptResult.title || 'transcript').replace(/[^a-zA-Z0-9_-]/g, '_')}.srt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (tab === 'transcript' || transcriptResult) {
+    if (!transcriptResult) return null;
+
+    if (!transcriptResult.success) {
+      return (
+        <div className="result-card" ref={cardRef} data-testid="result-card">
+          <h2 className="nomatch-title">No Transcript Found</h2>
+          <p className="nomatch-copy">{transcriptResult.message || 'No captions or spoken words were detected for this link.'}</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="result-card transcript-card" ref={cardRef} data-testid="result-card">
+        <div className="transcript-head">
+          <div className="transcript-meta-row">
+            <span className="transcript-badge source">
+              {transcriptResult.source === 'native_subtitles' ? '⚡ Official Captions' : '🤖 Gemini AI Transcribed'}
+            </span>
+            {transcriptResult.language && (
+              <span className="transcript-badge lang">
+                🌐 {transcriptResult.language.toUpperCase()}
+              </span>
+            )}
+            {transcriptResult.duration ? (
+              <span className="transcript-badge dur">
+                ⏱ {Math.floor(transcriptResult.duration / 60)}:{String(Math.floor(transcriptResult.duration % 60)).padStart(2, '0')}
+              </span>
+            ) : null}
+          </div>
+          <h2 className="transcript-title">{transcriptResult.title || 'Video Transcript'}</h2>
+          {transcriptResult.summary && (
+            <div className="transcript-summary">
+              <strong>💡 Summary:</strong> {transcriptResult.summary}
+            </div>
+          )}
+        </div>
+
+        <div className="transcript-toolbar">
+          <label className="transcript-switch-label">
+            <input
+              type="checkbox"
+              checked={showTimestamps}
+              onChange={(e) => setShowTimestamps(e.target.checked)}
+            />
+            <span>Show Timestamps</span>
+          </label>
+          <div className="transcript-actions">
+            <button
+              type="button"
+              className="pill"
+              onClick={handleCopyTranscript}
+            >
+              {copied ? '✓ Copied!' : '📋 Copy Text'}
+            </button>
+            <button
+              type="button"
+              className="pill"
+              onClick={handleDownloadTxt}
+            >
+              📥 Download TXT
+            </button>
+            {transcriptResult.srt && (
+              <button
+                type="button"
+                className="pill"
+                onClick={handleDownloadSrt}
+              >
+                📥 Download SRT
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="transcript-body">
+          {showTimestamps && transcriptResult.segments && transcriptResult.segments.length > 0 ? (
+            <div className="transcript-segments">
+              {transcriptResult.segments.map((seg, idx) => (
+                <div className="transcript-seg-row" key={idx}>
+                  <span className="transcript-timestamp">[{seg.start}]</span>
+                  <span className="transcript-text">{seg.text}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="transcript-plain">
+              {transcriptResult.text || transcriptResult.segments.map((s) => s.text).join(' ')}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
   if (tab === 'anime' || animeResult) {
     if (!animeResult) return null;
 
@@ -398,6 +533,18 @@ export function ResultCard({
           <div className="media-meta">
             {[mediaInfo.author, mediaInfo.duration].filter(Boolean).join(', ')}
           </div>
+          {onGetTranscript && (
+            <div style={{ marginTop: '10px' }}>
+              <button
+                type="button"
+                className="pill"
+                style={{ padding: '6px 14px 4px', fontSize: '12px' }}
+                onClick={() => onGetTranscript(mediaInfo.url || '')}
+              >
+                📝 Get Transcript
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

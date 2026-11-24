@@ -16,7 +16,9 @@ import {
   DownloadResult,
   MediaInfo,
   SongResult,
+  TranscriptResult,
   fetchLinkInfo,
+  getTranscript,
   identifyAnime,
   isDemoMode,
   recognizeSong,
@@ -48,6 +50,7 @@ const TABS: readonly { id: TabId; label: string }[] = [
   { id: 'post', label: 'Post' },
   { id: 'song', label: 'Song' },
   { id: 'anime', label: 'Anime' },
+  { id: 'transcript', label: 'Transcript' },
 ];
 
 type StatusTone = 'normal' | 'ok' | 'err';
@@ -62,6 +65,8 @@ export default function App() {
   const [songResult, setSongResult] = useState<SongResult | null>(null);
   const [animeResult, setAnimeResult] = useState<AnimeResult | null>(null);
   const [isIdentifyingAnime, setIsIdentifyingAnime] = useState(false);
+  const [transcriptResult, setTranscriptResult] = useState<TranscriptResult | null>(null);
+  const [isFetchingTranscript, setIsFetchingTranscript] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [lastDownload, setLastDownload] = useState<DownloadResult | null>(null);
   const [sheetScrolled, setSheetScrolled] = useState(false);
@@ -226,6 +231,48 @@ export default function App() {
         return;
       }
 
+      if (targetTab === 'transcript') {
+        if (!trimmed) {
+          setStatusTone('err');
+          setStatusText(COPY.emptyLink);
+          return;
+        }
+        const { id, signal } = beginRequest();
+        setMediaInfo(null);
+        setSongResult(null);
+        setAnimeResult(null);
+        setTranscriptResult(null);
+        setLastDownload(null);
+        setIsFetchingTranscript(true);
+        setPhaseWithClock('fetching');
+        setStatusTone('normal');
+        setStatusText('Extracting transcript & subtitles...');
+
+        try {
+          const result = await getTranscript(trimmed, signal);
+          if (reqIdRef.current !== id) return;
+          setTranscriptResult(result);
+          triggerCardEntrance();
+          setPhaseWithClock('ready');
+          setStatusTone(result.success ? 'ok' : 'err');
+          setStatusText(
+            result.success
+              ? `Transcript ready: ${result.title || 'Video'}`
+              : result.message || 'No spoken dialogue or captions found.'
+          );
+        } catch (err) {
+          if ((err as Error).name === 'AbortError' || reqIdRef.current !== id) return;
+          setPhaseWithClock('error');
+          setStatusTone('err');
+          setStatusText(
+            err instanceof DocksApiError ? err.message : COPY.network
+          );
+        } finally {
+          setIsFetchingTranscript(false);
+        }
+        return;
+      }
+
       if (!trimmed) {
         setStatusTone('err');
         setStatusText(COPY.emptyLink);
@@ -276,6 +323,8 @@ export default function App() {
     setTab(nextTab);
     setMediaInfo(null);
     setSongResult(null);
+    setAnimeResult(null);
+    setTranscriptResult(null);
     setLastDownload(null);
 
     if (nextTab !== 'song') {
@@ -771,12 +820,16 @@ export default function App() {
       ? 'Paste a link to a video or song clip'
       : tab === 'anime'
       ? 'Paste an Anime Reel, Short, TikTok, or YouTube link'
+      : tab === 'transcript'
+      ? 'Paste a YouTube, Reel, Short, or Podcast link to transcribe'
       : 'Paste a YouTube, Instagram or Pinterest link';
   const submitLabel =
     tab === 'song'
       ? 'Find song'
       : tab === 'anime'
       ? 'Find Anime & Episode'
+      : tab === 'transcript'
+      ? 'Get Transcript'
       : 'Get links';
 
   return (
@@ -1013,6 +1066,7 @@ export default function App() {
                 mediaInfo={mediaInfo}
                 songResult={songResult}
                 animeResult={animeResult}
+                transcriptResult={transcriptResult}
                 isWorking={isWorking}
                 onDownload={(type, quality) => void handleDownload(type, quality)}
                 onDownloadAllImages={(count) =>
@@ -1025,6 +1079,11 @@ export default function App() {
                     true
                   )
                 }
+                onGetTranscript={(u) => {
+                  setTab('transcript');
+                  setUrlInput(u);
+                  void runFetch('transcript', u);
+                }}
               />
             </div>
 

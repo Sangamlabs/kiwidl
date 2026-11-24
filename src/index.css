@@ -1584,3 +1584,137 @@ html.fine #ping {
   to { opacity: 1; transform: scale(1); }
 }
 
+/* Transcript Card & Viewer */
+.transcript-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.transcript-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.transcript-badge {
+  font: 700 11px/1 "Open Sans", sans-serif;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1.5px solid var(--line);
+}
+
+.transcript-badge.source {
+  background: #def7ec;
+  color: #03543f;
+  border-color: #bcf0da;
+}
+
+.transcript-badge.lang {
+  background: #e0e7ff;
+  color: #3730a3;
+  border-color: #c7d2fe;
+}
+
+.transcript-badge.dur {
+  background: var(--band2);
+  color: var(--ink);
+}
+
+.transcript-title {
+  font-size: 26px;
+  line-height: 1.15;
+  color: var(--ink);
+  margin: 0;
+}
+
+.transcript-summary {
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.03);
+  border-left: 3px solid var(--ink);
+  border-radius: 0 10px 10px 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.transcript-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 2px dashed var(--line);
+}
+
+.transcript-switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: 700 12.5px/1 "Open Sans", sans-serif;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+}
+
+.transcript-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.transcript-actions .pill {
+  padding: 8px 14px 6px !important;
+  font-size: 12px !important;
+}
+
+.transcript-body {
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 14px;
+  background: rgba(0, 0, 0, 0.02);
+  border: 2px solid var(--line);
+  border-radius: 12px;
+}
+
+.transcript-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.transcript-seg-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.transcript-timestamp {
+  font: 700 12px monospace;
+  color: var(--ink);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.transcript-text {
+  color: var(--ink);
+  flex: 1;
+}
+
+.transcript-plain {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+

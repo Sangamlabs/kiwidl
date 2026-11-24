@@ -1529,3 +1529,323 @@ async def identify_anime_endpoint(
         except Exception:
             pass
 
+
+# ==========================================
+# Transcript / Subtitles & Speech-to-Text API
+# ==========================================
+
+class TranscriptRequest(BaseModel):
+    url: str
+    format: Optional[str] = "timestamped"
+
+
+class TranscriptSegmentItem(BaseModel):
+    start: str
+    end: str
+    text: str
+
+
+class GeminiTranscriptDetection(BaseModel):
+    language: str
+    summary: str
+    segments: List[TranscriptSegmentItem]
+    fullText: str
+
+
+def _segments_to_srt(segments: List[dict]) -> str:
+    lines = []
+    for idx, seg in enumerate(segments, 1):
+        s = seg.get("start", "00:00")
+        e = seg.get("end", "00:05")
+
+        def to_srt_time(t_str):
+            parts = str(t_str).split(":")
+            if len(parts) == 2:
+                try:
+                    return f"00:{int(parts[0]):02d}:{int(parts[1]):02d},000"
+                except Exception:
+                    return f"00:{parts[0]}:{parts[1]},000"
+            elif len(parts) == 3:
+                try:
+                    return f"{int(parts[0]):02d}:{int(parts[1]):02d}:{int(parts[2]):02d},000"
+                except Exception:
+                    return f"{parts[0]}:{parts[1]}:{parts[2]},000"
+            return "00:00:00,000"
+
+        lines.append(str(idx))
+        lines.append(f"{to_srt_time(s)} --> {to_srt_time(e)}")
+        lines.append(seg.get("text", "").strip())
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _extract_native_subtitles(url: str) -> Optional[dict]:
+    """
+    Extract native subtitles or automatic captions via yt-dlp without downloading entire media.
+    """
+    import yt_dlp
+    import requests
+
+    cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
+    if not cookie_file.exists():
+        cookie_file = Path("cookies.txt")
+
+    ydl_opts = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "remote_components": ["ejs:github"],
+    }
+    if cookie_file.exists():
+        ydl_opts["cookiefile"] = str(cookie_file)
+    deno_path = shutil.which("deno") or "/usr/local/bin/deno"
+    if Path(deno_path).exists():
+        ydl_opts["js_runtimes"] = {"deno": {"path": str(deno_path)}}
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                return None
+
+            title = info.get("title") or "Video Transcript"
+            duration = float(info.get("duration") or 0.0)
+
+            subs_dict = info.get("subtitles") or {}
+            auto_dict = info.get("automatic_captions") or {}
+
+            pref_langs = ["en", "hi", "en-US", "en-GB", "en-orig", "hi-Latn", "es", "ja"]
+            target_track = None
+            lang_code = "en"
+
+            for lang in pref_langs:
+                if lang in subs_dict:
+                    target_track = subs_dict[lang]
+                    lang_code = lang
+                    break
+                if lang in auto_dict:
+                    target_track = auto_dict[lang]
+                    lang_code = lang
+                    break
+
+            if not target_track:
+                if subs_dict:
+                    lang_code = next(iter(subs_dict))
+                    target_track = subs_dict[lang_code]
+                elif auto_dict:
+                    lang_code = next(iter(auto_dict))
+                    target_track = auto_dict[lang_code]
+
+            if not target_track:
+                return None
+
+            json3_entry = next((s for s in target_track if s.get("ext") == "json3"), None)
+            vtt_entry = next((s for s in target_track if s.get("ext") == "vtt"), None)
+            srt_entry = next((s for s in target_track if s.get("ext") == "srt"), None)
+
+            segments = []
+            full_text_list = []
+
+            if json3_entry and json3_entry.get("url"):
+                r = requests.get(json3_entry["url"], timeout=10)
+                if r.status_code == 200:
+                    events = r.json().get("events", [])
+                    for e in events:
+                        start_ms = e.get("tStartMs", 0)
+                        dur_ms = e.get("dDurationMs", 2000)
+                        segs = e.get("segs", [])
+                        text = "".join(s.get("utf8", "") for s in segs).strip()
+                        if text and text != "\n":
+                            start_sec = start_ms // 1000
+                            end_sec = (start_ms + dur_ms) // 1000
+                            sm, ss = divmod(start_sec, 60)
+                            em, es = divmod(end_sec, 60)
+                            clean_t = text.replace("\n", " ").strip()
+                            if clean_t:
+                                segments.append({
+                                    "start": f"{sm:02d}:{ss:02d}",
+                                    "end": f"{em:02d}:{es:02d}",
+                                    "text": clean_t
+                                })
+                                full_text_list.append(clean_t)
+
+            elif (vtt_entry or srt_entry) and (vtt_entry or srt_entry).get("url"):
+                sub_url = (vtt_entry or srt_entry)["url"]
+                r = requests.get(sub_url, timeout=10)
+                if r.status_code == 200:
+                    sub_raw = r.text
+                    blocks = re.split(r"\n\s*\n", sub_raw)
+                    for block in blocks:
+                        lines = [line.strip() for line in block.strip().splitlines() if line.strip()]
+                        for i, line in enumerate(lines):
+                            if "-->" in line:
+                                times = line.split("-->")
+                                s_time = times[0].strip().split(".")[0].split(",")[0]
+                                e_time = times[1].strip().split(".")[0].split(",")[0]
+                                text_lines = lines[i + 1:]
+                                text = " ".join(re.sub(r"<[^>]+>", "", tl) for tl in text_lines).strip()
+                                if text:
+                                    parts = s_time.split(":")
+                                    start_formatted = ":".join(parts[-2:]) if len(parts) >= 2 else s_time
+                                    parts_e = e_time.split(":")
+                                    end_formatted = ":".join(parts_e[-2:]) if len(parts_e) >= 2 else e_time
+                                    segments.append({
+                                        "start": start_formatted,
+                                        "end": end_formatted,
+                                        "text": text
+                                    })
+                                    full_text_list.append(text)
+                                break
+
+            if segments:
+                full_text = " ".join(full_text_list)
+                return {
+                    "title": title,
+                    "duration": duration,
+                    "language": lang_code,
+                    "source": "native_subtitles",
+                    "summary": f"Directly extracted from official video captions ({len(segments)} timestamps).",
+                    "text": full_text,
+                    "segments": segments,
+                    "srt": _segments_to_srt(segments),
+                }
+    except Exception as ex:
+        logger.warning(f"Native subtitles extraction failed: {ex}")
+    return None
+
+
+def _run_gemini_audio_transcription(audio_file: Path) -> Optional[dict]:
+    """
+    Transcribe spoken words using Gemini Multimodal Audio-to-Text.
+    """
+    if not GEMINI_API_KEY or not GENAI_AVAILABLE:
+        return None
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    file_ref = None
+    try:
+        logger.info(f"Uploading audio/clip ({audio_file.stat().st_size} bytes) to Gemini for transcription...")
+        file_ref = client.files.upload(file=str(audio_file))
+
+        for _ in range(40):
+            f_info = client.files.get(name=file_ref.name)
+            state_val = getattr(f_info.state, "name", str(f_info.state))
+            if state_val == "ACTIVE":
+                break
+            elif state_val == "FAILED":
+                raise RuntimeError("Gemini file upload processing failed")
+            time.sleep(1)
+
+        prompt = (
+            "Listen to this audio clip and generate a complete, clean, and highly accurate transcript of all spoken words. "
+            "Identify the spoken language, provide a 2-sentence summary of the discussion, "
+            "and segment the speech with accurate start and end timestamps ([MM:SS]). "
+            "Preserve Hinglish/regional vocabulary accurately."
+        )
+
+        candidate_models = ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]
+        for model_name in candidate_models:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[file_ref, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=GeminiTranscriptDetection,
+                        temperature=0.2,
+                    ),
+                )
+                if response and response.text:
+                    logger.info(f"Gemini transcription succeeded using model '{model_name}'")
+                    data = json.loads(response.text)
+                    segments = data.get("segments", [])
+                    return {
+                        "language": data.get("language", "auto"),
+                        "summary": data.get("summary", ""),
+                        "text": data.get("fullText", ""),
+                        "segments": segments,
+                        "srt": _segments_to_srt(segments),
+                        "source": "gemini_ai",
+                    }
+            except Exception as model_err:
+                logger.warning(f"Model '{model_name}' transcription failed: {model_err}, trying next...")
+    except Exception as ex:
+        logger.error(f"Gemini audio transcription failed: {ex}")
+    finally:
+        if file_ref:
+            try:
+                client.files.delete(name=file_ref.name)
+            except Exception:
+                pass
+    return None
+
+
+@app.post("/v1/transcript")
+@app.post("/api/transcript")
+async def transcript_endpoint(
+    request: Request,
+    authenticated: bool = Depends(verify_api_key),
+):
+    """
+    Extract or transcribe video speech into timestamped transcript, plain text, and SRT.
+    1. Checks native subtitles / YouTube captions first (near-instant).
+    2. Falls back to Gemini Multimodal Audio Transcription for Reels, Shorts, and TikTok.
+    """
+    url = ""
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+            url = body.get("url", "").strip()
+        except Exception:
+            pass
+    else:
+        form = await request.form()
+        url = str(form.get("url", "")).strip()
+
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(
+            status_code=400,
+            detail="A valid video URL (http/https) is required for transcript extraction",
+        )
+
+    loop = asyncio.get_running_loop()
+
+    # Step 1: Fast native subtitles extraction
+    native_result = await loop.run_in_executor(None, _extract_native_subtitles, url)
+    if native_result and native_result.get("segments"):
+        return {
+            "success": True,
+            **native_result,
+        }
+
+    # Step 2: Gemini Audio AI Transcription Fallback
+    temp_dir = TMP_DIR / f"tr_{uuid.uuid4().hex[:8]}_{int(time.time() * 1000)}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        temp_audio = temp_dir / f"clip_{uuid.uuid4().hex[:6]}.mp4"
+        downloaded_clip, dur = await loop.run_in_executor(None, _download_lowres_video, url, temp_audio)
+
+        if downloaded_clip and downloaded_clip.exists():
+            gemini_result = await loop.run_in_executor(None, _run_gemini_audio_transcription, downloaded_clip)
+            if gemini_result and gemini_result.get("segments"):
+                return {
+                    "success": True,
+                    "title": "Audio Transcript",
+                    "duration": dur,
+                    **gemini_result,
+                }
+
+        # If neither native captions nor speech detection succeeded
+        return {
+            "success": False,
+            "message": "No spoken words, captions, or dialogue were detected in this video.",
+            "segments": [],
+            "text": "",
+        }
+    finally:
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+

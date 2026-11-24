@@ -1,4 +1,4 @@
-export type TabId = 'video' | 'audio' | 'post' | 'song' | 'anime';
+export type TabId = 'video' | 'audio' | 'post' | 'song' | 'anime' | 'transcript';
 export type PlatformId = 'youtube' | 'instagram' | 'pinterest';
 export type Phase = 'idle' | 'fetching' | 'ready' | 'working' | 'done' | 'error';
 
