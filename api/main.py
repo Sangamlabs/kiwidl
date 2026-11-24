@@ -1012,6 +1012,241 @@ def _fetch_anilist_info(title: str) -> Optional[dict]:
     return None
 
 
+def _extract_frame(stream_or_file: str, sec: float, out_path: Path, vf: Optional[str] = None):
+    cmd = [
+        "ffmpeg",
+        "-ss", f"{sec:.2f}",
+        "-i", str(stream_or_file),
+    ]
+    if vf:
+        cmd.extend(["-vf", vf])
+    cmd.extend([
+        "-vframes", "1",
+        "-q:v", "2",
+        "-y", str(out_path),
+    ])
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
+def _query_trace_moe(frame_file: Path, anilist_id: Optional[int] = None) -> List[dict]:
+    import requests
+    if not frame_file.exists() or frame_file.stat().st_size < 400:
+        return []
+    url = "https://api.trace.moe/search?cutBorders"
+    if anilist_id:
+        url += f"&anilistID={anilist_id}"
+    else:
+        url += "&anilistInfo"
+    try:
+        with open(frame_file, "rb") as f:
+            res = requests.post(
+                url,
+                files={"image": ("frame.jpg", f, "image/jpeg")},
+                timeout=15,
+            )
+        if res.status_code == 200:
+            data = res.json()
+            return data.get("result", [])
+    except Exception as ex:
+        logger.warning(f"trace.moe query error: {ex}")
+    return []
+
+
+def _get_stream_and_duration(target_url: str):
+    import yt_dlp
+    ydl_opts = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "format": "worst[ext=mp4]/worst/best",
+        "remote_components": ["ejs:github"],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web_embedded", "tv", "mweb"],
+            }
+        },
+    }
+    cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
+    if not cookie_file.exists():
+        cookie_file = Path("cookies.txt")
+    if cookie_file.exists():
+        ydl_opts["cookiefile"] = str(cookie_file)
+    deno_path = shutil.which("deno") or "/usr/local/bin/deno"
+    if Path(deno_path).exists():
+        ydl_opts["js_runtimes"] = {"deno": {"path": str(deno_path)}}
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(target_url, download=False)
+        if not info:
+            return None, 0.0
+        dur = float(info.get("duration") or 0.0)
+        stream = info.get("url")
+        if not stream:
+            for f in info.get("formats", []):
+                if f.get("url") and f.get("vcodec") != "none":
+                    stream = f["url"]
+                    break
+        return stream, dur
+
+
+def _download_lowres_video(target_url: str, out_file: Path, audio_only: bool = False) -> tuple[Optional[Path], float]:
+    import yt_dlp
+    cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
+    if not cookie_file.exists():
+        cookie_file = Path("cookies.txt")
+
+    if audio_only:
+        fmt = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best"
+    else:
+        fmt = "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/worst[ext=mp4]/worst/best"
+
+    ydl_opts = {
+        "outtmpl": str(out_file),
+        "format": fmt,
+        "quiet": True,
+        "no_warnings": True,
+        "max_filesize": 35 * 1024 * 1024,
+        "remote_components": ["ejs:github"],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web_embedded", "tv", "mweb"],
+            }
+        },
+    }
+    if cookie_file.exists():
+        ydl_opts["cookiefile"] = str(cookie_file)
+    deno_path = shutil.which("deno") or "/usr/local/bin/deno"
+    if Path(deno_path).exists():
+        ydl_opts["js_runtimes"] = {"deno": {"path": str(deno_path)}}
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(target_url, download=True)
+            dur = float(info.get("duration") or 0.0) if info else 0.0
+            if out_file.exists() and out_file.stat().st_size > 1000:
+                return out_file, dur
+            matches = list(out_file.parent.glob(f"{out_file.stem}*"))
+            for m in matches:
+                if m.is_file() and m.stat().st_size > 1000:
+                    return m, dur
+    except Exception as ex:
+        logger.warning(f"Low-res download via yt-dlp failed: {ex}")
+    return None, 0.0
+
+
+def _run_gemini_multimodal(video_file: Path) -> Optional[dict]:
+    if not GEMINI_API_KEY or not GENAI_AVAILABLE:
+        return None
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    file_ref = None
+    try:
+        logger.info(f"Uploading clip ({video_file.stat().st_size} bytes) to Gemini Files API...")
+        file_ref = client.files.upload(file=str(video_file))
+
+        # Poll until file is processed and ACTIVE
+        for _ in range(40):
+            f_info = client.files.get(name=file_ref.name)
+            state_val = getattr(f_info.state, "name", str(f_info.state))
+            if state_val == "ACTIVE":
+                break
+            elif state_val == "FAILED":
+                raise RuntimeError("Gemini file upload processing failed")
+            time.sleep(1)
+
+        prompt = (
+            "Analyze both the visuals and audio/dialogue of this anime clip. "
+            "Ignore any color grading (CC filters), horizontal mirroring/flipping, background music edits, "
+            "or social media meme text overlays. Identify the exact anime series, season/arc, main characters visible, "
+            "the exact or estimated episode number, and what is happening in the scene."
+        )
+
+        candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash"]
+        response = None
+        last_err = None
+        for model_name in candidate_models:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[file_ref, prompt],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=GeminiAnimeDetection,
+                        temperature=0.2,
+                    ),
+                )
+                if response and response.text:
+                    logger.info(f"Gemini identification succeeded using model '{model_name}'")
+                    return json.loads(response.text)
+            except Exception as model_err:
+                last_err = model_err
+                logger.warning(f"Model '{model_name}' failed: {model_err}, trying next candidate...")
+
+        if last_err:
+            raise last_err
+    except Exception as ex:
+        logger.error(f"Gemini anime multimodal call failed: {ex}")
+    finally:
+        if file_ref:
+            try:
+                client.files.delete(name=file_ref.name)
+            except Exception:
+                pass
+    return None
+
+
+def _run_fallback_trace_pipeline(stream: str, vid_duration: float, out_dir: Path) -> List[dict]:
+    # Calculate 3 frame timestamps (25%, 50%, 75% duration)
+    if vid_duration and vid_duration > 1.5:
+        t1 = max(0.5, vid_duration * 0.25)
+        t2 = max(1.0, vid_duration * 0.50)
+        t3 = max(1.5, min(vid_duration - 0.5, vid_duration * 0.75))
+    else:
+        t1 = 1.0
+        t2 = 3.0
+        t3 = 5.0
+
+    all_results: List[dict] = []
+    f_25 = out_dir / "frame_25.jpg"
+    f_50 = out_dir / "frame_50.jpg"
+    f_75 = out_dir / "frame_75.jpg"
+
+    _extract_frame(stream, t1, f_25)
+    _extract_frame(stream, t2, f_50)
+    _extract_frame(stream, t3, f_75)
+
+    for f in (f_50, f_25, f_75):
+        res_list = _query_trace_moe(f)
+        if res_list:
+            all_results.extend(res_list)
+
+    best_sim = max((r.get("similarity", 0) for r in all_results), default=0.0)
+
+    # Pass 2: If initial similarity < 0.85, apply Meme Template Crop & Color Normalization
+    if best_sim < 0.85:
+        # Center-crop middle frame to strip Twitter/meme headers & watermarks
+        f_crop = out_dir / "frame_crop_50.jpg"
+        _extract_frame(stream, t2, f_crop, vf="crop=iw:ih*0.65:0:ih*0.25")
+        res_crop = _query_trace_moe(f_crop)
+        if res_crop:
+            all_results.extend(res_crop)
+
+        # Color Normalization to neutralize heavy CC filters / tints
+        f_norm = out_dir / "frame_norm_50.jpg"
+        _extract_frame(stream, t2, f_norm, vf="normalize=blackpt=black:whitept=white:smoothing=50")
+        res_norm = _query_trace_moe(f_norm)
+        if res_norm:
+            all_results.extend(res_norm)
+
+        # Crop + Color Normalization combined
+        f_crop_norm = out_dir / "frame_crop_norm_50.jpg"
+        _extract_frame(stream, t2, f_crop_norm, vf="crop=iw:ih*0.65:0:ih*0.25,normalize=blackpt=black:whitept=white:smoothing=50")
+        res_crop_norm = _query_trace_moe(f_crop_norm)
+        if res_crop_norm:
+            all_results.extend(res_crop_norm)
+
+    return all_results
+
+
 @app.post("/v1/identify-anime")
 @app.post("/api/identify-anime")
 async def identify_anime_endpoint(
@@ -1020,7 +1255,7 @@ async def identify_anime_endpoint(
 ):
     """
     Hybrid Anime Identification Pipeline:
-    1. Google Gemini 2.5 Flash Multimodal (Visual + Audio) for accurate anime series, characters, episode & scene.
+    1. Google Gemini Multimodal (Visual + Audio) for accurate anime series, characters, episode & scene.
     2. AniList GraphQL API for official metadata, banner & cover art.
     3. trace.moe scoped to anilistID for exact timestamp and scene preview clip.
     4. Resilient fallback to multi-frame FFmpeg color normalization & crop if Gemini is unconfigured or unavailable.
@@ -1046,231 +1281,6 @@ async def identify_anime_endpoint(
     loop = asyncio.get_running_loop()
     frame_dir = TMP_DIR / f"anime_batch_{uuid.uuid4().hex[:8]}_{int(time.time() * 1000)}"
     frame_dir.mkdir(parents=True, exist_ok=True)
-
-    def _extract_frame(stream_or_file: str, sec: float, out_path: Path, vf: Optional[str] = None):
-        cmd = [
-            "ffmpeg",
-            "-ss", f"{sec:.2f}",
-            "-i", str(stream_or_file),
-        ]
-        if vf:
-            cmd.extend(["-vf", vf])
-        cmd.extend([
-            "-vframes", "1",
-            "-q:v", "2",
-            "-y", str(out_path),
-        ])
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-
-    def _query_trace_moe(frame_file: Path, anilist_id: Optional[int] = None) -> List[dict]:
-        import requests
-        if not frame_file.exists() or frame_file.stat().st_size < 400:
-            return []
-        url = "https://api.trace.moe/search?cutBorders"
-        if anilist_id:
-            url += f"&anilistID={anilist_id}"
-        else:
-            url += "&anilistInfo"
-        try:
-            with open(frame_file, "rb") as f:
-                res = requests.post(
-                    url,
-                    files={"image": ("frame.jpg", f, "image/jpeg")},
-                    timeout=15,
-                )
-            if res.status_code == 200:
-                data = res.json()
-                return data.get("result", [])
-        except Exception as ex:
-            logger.warning(f"trace.moe query error: {ex}")
-        return []
-
-    def _get_stream_and_duration(target_url: str):
-        import yt_dlp
-        ydl_opts = {
-            "skip_download": True,
-            "quiet": True,
-            "no_warnings": True,
-            "format": "worst[ext=mp4]/worst/best",
-            "remote_components": ["ejs:github"],
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["web_embedded", "tv", "mweb"],
-                }
-            },
-        }
-        cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
-        if not cookie_file.exists():
-            cookie_file = Path("cookies.txt")
-        if cookie_file.exists():
-            ydl_opts["cookiefile"] = str(cookie_file)
-        deno_path = shutil.which("deno") or "/usr/local/bin/deno"
-        if Path(deno_path).exists():
-            ydl_opts["js_runtimes"] = {"deno": {"path": str(deno_path)}}
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(target_url, download=False)
-            if not info:
-                return None, 0.0
-            dur = float(info.get("duration") or 0.0)
-            stream = info.get("url")
-            if not stream:
-                for f in info.get("formats", []):
-                    if f.get("url") and f.get("vcodec") != "none":
-                        stream = f["url"]
-                        break
-            return stream, dur
-
-    def _download_lowres_video(target_url: str, out_file: Path) -> tuple[Optional[Path], float]:
-        import yt_dlp
-        cookie_file = Path(os.getenv("COOKIES_FILE", "/opt/kiwiapi/cookies.txt"))
-        if not cookie_file.exists():
-            cookie_file = Path("cookies.txt")
-
-        ydl_opts = {
-            "outtmpl": str(out_file),
-            "format": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/worst[ext=mp4]/worst/best",
-            "quiet": True,
-            "no_warnings": True,
-            "max_filesize": 25 * 1024 * 1024,
-            "remote_components": ["ejs:github"],
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["web_embedded", "tv", "mweb"],
-                }
-            },
-        }
-        if cookie_file.exists():
-            ydl_opts["cookiefile"] = str(cookie_file)
-        deno_path = shutil.which("deno") or "/usr/local/bin/deno"
-        if Path(deno_path).exists():
-            ydl_opts["js_runtimes"] = {"deno": {"path": str(deno_path)}}
-
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(target_url, download=True)
-                dur = float(info.get("duration") or 0.0) if info else 0.0
-                if out_file.exists() and out_file.stat().st_size > 1000:
-                    return out_file, dur
-                matches = list(out_file.parent.glob(f"{out_file.stem}*"))
-                for m in matches:
-                    if m.is_file() and m.stat().st_size > 1000:
-                        return m, dur
-        except Exception as ex:
-            logger.warning(f"Low-res download via yt-dlp failed: {ex}")
-        return None, 0.0
-
-    def _run_gemini_multimodal(video_file: Path) -> Optional[dict]:
-        if not GEMINI_API_KEY or not GENAI_AVAILABLE:
-            return None
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        file_ref = None
-        try:
-            logger.info(f"Uploading clip ({video_file.stat().st_size} bytes) to Gemini Files API...")
-            file_ref = client.files.upload(file=str(video_file))
-
-            # Poll until file is processed and ACTIVE
-            for _ in range(40):
-                f_info = client.files.get(name=file_ref.name)
-                state_val = getattr(f_info.state, "name", str(f_info.state))
-                if state_val == "ACTIVE":
-                    break
-                elif state_val == "FAILED":
-                    raise RuntimeError("Gemini file upload processing failed")
-                time.sleep(1)
-
-            prompt = (
-                "Analyze both the visuals and audio/dialogue of this anime clip. "
-                "Ignore any color grading (CC filters), horizontal mirroring/flipping, background music edits, "
-                "or social media meme text overlays. Identify the exact anime series, season/arc, main characters visible, "
-                "the exact or estimated episode number, and what is happening in the scene."
-            )
-
-            # Try requested gemini-2.5-flash first, and fallback gracefully if deprecated/overloaded
-            candidate_models = ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]
-            response = None
-            last_err = None
-            for model_name in candidate_models:
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=[file_ref, prompt],
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=GeminiAnimeDetection,
-                            temperature=0.2,
-                        ),
-                    )
-                    if response and response.text:
-                        logger.info(f"Gemini identification succeeded using model '{model_name}'")
-                        return json.loads(response.text)
-                except Exception as model_err:
-                    last_err = model_err
-                    logger.warning(f"Model '{model_name}' failed: {model_err}, trying next candidate...")
-
-            if last_err:
-                raise last_err
-        except Exception as ex:
-            logger.error(f"Gemini anime multimodal call failed: {ex}")
-        finally:
-            if file_ref:
-                try:
-                    client.files.delete(name=file_ref.name)
-                except Exception:
-                    pass
-        return None
-
-    def _run_fallback_trace_pipeline(stream: str, vid_duration: float, out_dir: Path) -> List[dict]:
-        # Calculate 3 frame timestamps (25%, 50%, 75% duration)
-        if vid_duration and vid_duration > 1.5:
-            t1 = max(0.5, vid_duration * 0.25)
-            t2 = max(1.0, vid_duration * 0.50)
-            t3 = max(1.5, min(vid_duration - 0.5, vid_duration * 0.75))
-        else:
-            t1 = 1.0
-            t2 = 3.0
-            t3 = 5.0
-
-        all_results: List[dict] = []
-        f_25 = out_dir / "frame_25.jpg"
-        f_50 = out_dir / "frame_50.jpg"
-        f_75 = out_dir / "frame_75.jpg"
-
-        _extract_frame(stream, t1, f_25)
-        _extract_frame(stream, t2, f_50)
-        _extract_frame(stream, t3, f_75)
-
-        for f in (f_50, f_25, f_75):
-            res_list = _query_trace_moe(f)
-            if res_list:
-                all_results.extend(res_list)
-
-        best_sim = max((r.get("similarity", 0) for r in all_results), default=0.0)
-
-        # Pass 2: If initial similarity < 0.85, apply Meme Template Crop & Color Normalization
-        if best_sim < 0.85:
-            # Center-crop middle frame to strip Twitter/meme headers & watermarks
-            f_crop = out_dir / "frame_crop_50.jpg"
-            _extract_frame(stream, t2, f_crop, vf="crop=iw:ih*0.65:0:ih*0.25")
-            res_crop = _query_trace_moe(f_crop)
-            if res_crop:
-                all_results.extend(res_crop)
-
-            # Color Normalization to neutralize heavy CC filters / tints
-            f_norm = out_dir / "frame_norm_50.jpg"
-            _extract_frame(stream, t2, f_norm, vf="normalize=blackpt=black:whitept=white:smoothing=50")
-            res_norm = _query_trace_moe(f_norm)
-            if res_norm:
-                all_results.extend(res_norm)
-
-            # Crop + Color Normalization combined
-            f_crop_norm = out_dir / "frame_crop_norm_50.jpg"
-            _extract_frame(stream, t2, f_crop_norm, vf="crop=iw:ih*0.65:0:ih*0.25,normalize=blackpt=black:whitept=white:smoothing=50")
-            res_crop_norm = _query_trace_moe(f_crop_norm)
-            if res_crop_norm:
-                all_results.extend(res_crop_norm)
-
-        return all_results
 
     try:
         # Step 1: Attempt fast low-res clip download (with audio) for Gemini Multimodal Analysis
@@ -1595,6 +1605,11 @@ def _extract_native_subtitles(url: str) -> Optional[dict]:
         "quiet": True,
         "no_warnings": True,
         "remote_components": ["ejs:github"],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web_embedded", "tv", "mweb"],
+            }
+        },
     }
     if cookie_file.exists():
         ydl_opts["cookiefile"] = str(cookie_file)
@@ -1742,7 +1757,7 @@ def _run_gemini_audio_transcription(audio_file: Path) -> Optional[dict]:
             "Preserve Hinglish/regional vocabulary accurately."
         )
 
-        candidate_models = ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-3.5-flash"]
+        candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash"]
         for model_name in candidate_models:
             try:
                 response = client.models.generate_content(
@@ -1822,8 +1837,8 @@ async def transcript_endpoint(
     temp_dir = TMP_DIR / f"tr_{uuid.uuid4().hex[:8]}_{int(time.time() * 1000)}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     try:
-        temp_audio = temp_dir / f"clip_{uuid.uuid4().hex[:6]}.mp4"
-        downloaded_clip, dur = await loop.run_in_executor(None, _download_lowres_video, url, temp_audio)
+        temp_audio = temp_dir / f"clip_{uuid.uuid4().hex[:6]}.m4a"
+        downloaded_clip, dur = await loop.run_in_executor(None, _download_lowres_video, url, temp_audio, True)
 
         if downloaded_clip and downloaded_clip.exists():
             gemini_result = await loop.run_in_executor(None, _run_gemini_audio_transcription, downloaded_clip)
